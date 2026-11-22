@@ -5,8 +5,13 @@
 3. Hash every row into one of N buckets by its key and compute, per bucket,
    ``count(*)`` and ``sum(row_hash)`` inside each database. Only these
    checksums leave the database.
-4. Download normalized rows only from buckets whose checksums differ and
-   compare them by key: removed, added, changed (with the changed columns).
+4. Bisect: split each differing bucket that is still large into ``factor``
+   children (``key_hash % (N * factor)``) and compare their checksums, level
+   by level, until segments are small. Each level is one more scan per side,
+   so it runs only when it saves downloading more than ``bisection_threshold``
+   rows.
+5. Download normalized rows only from the differing leaf segments and compare
+   them by key: removed, added, changed (with the changed columns).
 """
 
 from __future__ import annotations
@@ -17,6 +22,7 @@ from collections import Counter
 from collections.abc import Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
+from functools import partial
 from typing import Any, TypeVar
 
 from whydiff.connectors.base import Connector, get_columns
@@ -34,7 +40,8 @@ from whydiff.report.models import (
 )
 
 MAX_BUCKETS = 1 << 18
-IDS_PER_QUERY = 500
+HASH_SPACE = 1 << 60  # key hashes are 60-bit, so moduli beyond this split nothing
+IDS_PER_QUERY = 10_000
 _NUMERIC_RANK = {TypeFamily.INTEGER: 0, TypeFamily.DECIMAL: 1, TypeFamily.FLOAT: 2}
 
 T = TypeVar("T")
@@ -123,8 +130,69 @@ def _chunks(items: Sequence[T], size: int) -> Iterable[Sequence[T]]:
         yield items[i : i + size]
 
 
-def _checksums(rows: Iterable[Sequence[Any]]) -> dict[int, tuple[int, int]]:
-    return {int(b): (int(n), int(s)) for b, n, s in rows}
+@dataclass(frozen=True)
+class _Side:
+    """One table to compare, with its columns resolved and harmonized."""
+
+    conn: Connector
+    table: TableRef
+    keys: list[Column]
+    columns: list[Column]  # keys + compared values, for checksums
+    values: list[Column]  # compared values only, for downloaded rows
+    where: str | None
+
+    def checksums(
+        self, rules: NormalizationRules, modulus: int, parent: tuple[int, Sequence[int]] | None
+    ) -> dict[int, tuple[int, int]]:
+        d = self.conn.dialect
+        result: dict[int, tuple[int, int]] = {}
+        parents: Iterable[tuple[int, Sequence[int]] | None] = (
+            [None]
+            if parent is None
+            else [(parent[0], ids) for ids in _chunks(parent[1], IDS_PER_QUERY)]
+        )
+        for p in parents:
+            sql = d.segment_checksums_query(
+                self.table, self.keys, self.columns, rules, modulus, self.where, p
+            )
+            result.update({int(b): (int(n), int(h)) for b, n, h in self.conn.execute(sql)})
+        return result
+
+    def rows(self, rules: NormalizationRules, segments: Sequence[_Segment]) -> list[Row]:
+        d = self.conn.dialect
+        by_modulus: dict[int, list[int]] = {}
+        for seg in segments:
+            by_modulus.setdefault(seg.modulus, []).append(seg.id)
+        rows: list[Row] = []
+        for modulus, ids in sorted(by_modulus.items()):
+            for chunk in _chunks(ids, IDS_PER_QUERY):
+                sql = d.segment_rows_query(
+                    self.table, self.keys, self.values, rules, modulus, chunk, self.where
+                )
+                rows.extend(
+                    tuple(None if v is None else str(v) for v in r) for r in self.conn.execute(sql)
+                )
+        return rows
+
+
+@dataclass(frozen=True)
+class _Segment:
+    """Rows whose ``key_hash % modulus == id``; ``size`` is the larger side's count."""
+
+    modulus: int
+    id: int
+    size: int
+
+
+def _differing(
+    modulus: int, a: dict[int, tuple[int, int]], b: dict[int, tuple[int, int]]
+) -> list[_Segment]:
+    empty = (0, 0)
+    return [
+        _Segment(modulus, s, max(a.get(s, empty)[0], b.get(s, empty)[0]))
+        for s in sorted(a.keys() | b.keys())
+        if a.get(s, empty) != b.get(s, empty)
+    ]
 
 
 def diff_tables(
@@ -140,10 +208,20 @@ def diff_tables(
     where: str | None = None,
     target_where: str | None = None,
     bucket_size: int = 2000,
+    leaf_size: int = 64,
+    bisection_factor: int = 32,
+    bisection_threshold: int = 10_000,
+    max_bisection_levels: int = 4,
     max_rows: int = 1_000_000,
     sample_limit: int = 10,
 ) -> DiffResult:
-    """Diff two tables. ``where`` applies to both sides unless ``target_where`` is given."""
+    """Diff two tables. ``where`` applies to both sides unless ``target_where`` is given.
+
+    Bisection splits differing buckets larger than ``leaf_size`` rows into
+    ``bisection_factor`` children per level, at most ``max_bisection_levels``
+    levels, and only while the rows it would avoid downloading exceed
+    ``bisection_threshold``. ``max_rows`` caps the rows downloaded per side.
+    """
     started = time.perf_counter()
     rules = rules or NormalizationRules()
     src_ref = TableRef.parse(source_table) if isinstance(source_table, str) else source_table
@@ -151,6 +229,8 @@ def diff_tables(
     tgt_where = target_where if target_where is not None else where
     if not key:
         raise ValueError("At least one key column is required")
+    if bisection_factor < 2:
+        raise ValueError("bisection_factor must be at least 2")
     parallel = source is not target
 
     # 1. schema
@@ -170,8 +250,23 @@ def diff_tables(
     values, _ = _match_columns(src_cols, tgt_cols, columns, excluded | set(key_lower))
     if columns:
         schema.compared_columns = [p.name for p in values]
-    key_names = [p.name for p in keys]
     compared = [*keys, *values]
+    src = _Side(
+        source,
+        src_ref,
+        [p.source for p in keys],
+        [p.source for p in compared],
+        [p.source for p in values],
+        where,
+    )
+    tgt = _Side(
+        target,
+        tgt_ref,
+        [p.target for p in keys],
+        [p.target for p in compared],
+        [p.target for p in values],
+        tgt_where,
+    )
 
     # 2. counts
     sd, td = source.dialect, target.dialect
@@ -183,68 +278,74 @@ def diff_tables(
     buckets = max(1, min(MAX_BUCKETS, math.ceil(max(n_src, n_tgt) / bucket_size)))
 
     # 3. bucket checksums
-    src_keys, tgt_keys = [p.source for p in keys], [p.target for p in keys]
-    src_all, tgt_all = [p.source for p in compared], [p.target for p in compared]
-    sums_src, sums_tgt = _both(
-        parallel,
-        lambda: _checksums(
-            source.execute(
-                sd.bucket_checksums_query(src_ref, src_keys, src_all, rules, buckets, where)
-            )
+    first = _differing(
+        buckets,
+        *_both(
+            parallel,
+            lambda: src.checksums(rules, buckets, None),
+            lambda: tgt.checksums(rules, buckets, None),
         ),
-        lambda: _checksums(
-            target.execute(
-                td.bucket_checksums_query(tgt_ref, tgt_keys, tgt_all, rules, buckets, tgt_where)
-            )
-        ),
-    )
-    empty = (0, 0)
-    differing = sorted(
-        b
-        for b in sums_src.keys() | sums_tgt.keys()
-        if sums_src.get(b, empty) != sums_tgt.get(b, empty)
     )
 
-    # 4. drill down, within the row budget
-    inspect: list[int] = []
-    budget = 0
-    for b in differing:
-        size = max(sums_src.get(b, empty)[0], sums_tgt.get(b, empty)[0])
-        if inspect and budget + size > max_rows:
+    # 4. bisection
+    leaves: list[_Segment] = []
+    current, modulus, levels = first, buckets, 0
+    while current:
+        large = [seg for seg in current if seg.size > leaf_size]
+        leaves.extend(seg for seg in current if seg.size <= leaf_size)
+        if (
+            not large
+            or levels >= max_bisection_levels
+            or modulus * bisection_factor > HASH_SPACE
+            or sum(seg.size for seg in large) <= bisection_threshold
+        ):
+            leaves.extend(large)
             break
-        inspect.append(b)
-        budget += size
+        parent = (modulus, [seg.id for seg in large])
+        modulus *= bisection_factor
+        current = _differing(
+            modulus,
+            *_both(
+                parallel,
+                partial(src.checksums, rules, modulus, parent),
+                partial(tgt.checksums, rules, modulus, parent),
+            ),
+        )
+        levels += 1
 
-    def fetch(
-        conn: Connector, ref: TableRef, k: list[Column], c: list[Column], w: str | None
-    ) -> list[Row]:
-        rows: list[Row] = []
-        for ids in _chunks(inspect, IDS_PER_QUERY):
-            sql = conn.dialect.bucket_rows_query(ref, k, c, rules, buckets, ids, w)
-            rows.extend(tuple(None if v is None else str(v) for v in r) for r in conn.execute(sql))
-        return rows
-
+    # 5. download within the row budget, then compare row by row
+    selected: list[_Segment] = []
+    budget = 0
+    for seg in leaves:
+        if selected and budget + seg.size > max_rows:
+            break
+        selected.append(seg)
+        budget += seg.size
     rows_src, rows_tgt = _both(
-        parallel,
-        lambda: fetch(source, src_ref, src_keys, [p.source for p in values], where),
-        lambda: fetch(target, tgt_ref, tgt_keys, [p.target for p in values], tgt_where),
+        parallel, lambda: src.rows(rules, selected), lambda: tgt.rows(rules, selected)
     )
 
     result = DiffResult(
         status=Status.IDENTICAL,
         source=f"{sd.name}:{src_ref}",
         target=f"{td.name}:{tgt_ref}",
-        key=key_names,
+        key=[p.name for p in keys],
         where=where,
         rules=rules,
         schema_diff=schema,
         counts=RowCounts(source=n_src, target=n_tgt),
-        buckets=BucketStats(total=buckets, differing=len(differing), inspected=len(inspect)),
-        truncated=len(inspect) < len(differing),
+        buckets=BucketStats(
+            total=buckets,
+            differing=len(first),
+            bisection_levels=levels,
+            segments=len(leaves),
+            inspected=len(selected),
+            rows_downloaded=len(rows_src) + len(rows_tgt),
+        ),
+        truncated=len(selected) < len(leaves),
     )
     _compare_rows(result, rows_src, rows_tgt, len(keys), [p.name for p in compared], sample_limit)
-    data_differs = bool(differing) or n_src != n_tgt
-    if data_differs or schema.differs:
+    if first or n_src != n_tgt or schema.differs:
         result.status = Status.DIFFERENT
     result.elapsed_seconds = round(time.perf_counter() - started, 3)
     return result
