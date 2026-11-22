@@ -2,19 +2,69 @@
 
 **Diff tables across databases — and find out *why* they differ.**
 
-> 🚧 Early development. This release only reserves the name; nothing works yet.
-> Star or watch the repository to follow progress.
+> 🚧 Early development: the core diff works on Postgres/Greenplum and DuckDB;
+> the API and output may still change. Star or watch the repository to follow progress.
 
-Most diff tools tell you *whether* two tables match. whydiff aims to tell you
-*what* changed and *why*:
+Most diff tools tell you *whether* two tables match. whydiff tells you *what*
+changed, and (soon) *why*:
 
 ```
-$ whydiff diff pg://prod:orders duckdb://dev.duckdb:orders --key id
+$ whydiff diff postgresql://localhost/shop orders postgresql://localhost/shop orders_v2 --key id
 
-  rows      1,204,331 vs 1,204,331
-  changed   18,402 rows, all in column created_at
-  diagnosis constant shift of +03:00:00  →  likely a timezone mismatch
+rows     200,000 vs 199,999  (-1)
+buckets  63 of 100 differ
+
+removed  2   (in source only)
+added    1   (in target only)
+changed  101
+         created_at: 100 rows
+         amount: 1 rows
+
+examples
+  - id='17'
+  + id='300001'
+  ~ id='42'  amount: '2.94' -> '2.95'
+  ~ id='5000'  created_at: '2024-01-04T11:20:00.000000' -> '2024-01-04T14:20:00.000000'
+
+DIFFERENT in 2.77s
 ```
+
+Coming in 0.3: `diagnosis  created_at shifted by exactly +03:00:00 → likely a timezone mismatch`.
+
+## Install and use
+
+```bash
+pip install "whydiff[postgres,duckdb]"
+
+whydiff diff postgresql://user@prod/db public.orders duckdb:///dev.duckdb main.orders --key id
+whydiff diff SRC TABLE TGT TABLE -k id --exclude updated_at --where "created_at >= '2024-01-01'"
+whydiff diff SRC TABLE TGT TABLE -k id --timestamp-precision 3 --trim --json
+```
+
+Exit codes: `0` identical, `1` different, `2` error — ready for CI.
+
+From Python:
+
+```python
+from whydiff import connect, diff_tables, render_text
+
+result = diff_tables(connect("postgresql://..."), "orders", connect("duckdb:///dev.duckdb"), "orders", ["id"])
+print(render_text(result))
+```
+
+## How it works
+
+1. Columns are matched by name; types from different databases are harmonized
+   (an `integer` and a `numeric(12,2)` are both compared as decimals).
+2. Every value is normalized to a canonical string (configurable: timestamp
+   precision, decimal scale, float digits, trimming, case), each row is hashed
+   to a 60-bit integer, and rows are spread over buckets by the hash of their key.
+3. Each database returns only `count(*)` and `sum(row_hash)` per bucket. The
+   sum does not depend on row order, so no sorting is needed.
+4. Only rows from buckets whose checksums differ are downloaded and compared.
+
+The SQL each database runs is tested against a pure-Python reference
+implementation, so the same data hashes identically everywhere.
 
 ## Planned features
 
@@ -45,3 +95,14 @@ $ whydiff diff pg://prod:orders duckdb://dev.duckdb:orders --key id
 ## License
 
 MIT
+
+## Development
+
+```bash
+uv sync --group dev
+uv run pytest            # DuckDB tests run out of the box
+WHYDIFF_TEST_PG_URI=postgresql://postgres:postgres@localhost:5432/postgres uv run pytest
+uv run ruff check src tests && uv run mypy
+```
+
+A local Postgres for tests: `docker run -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:16`.

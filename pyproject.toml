@@ -4,13 +4,13 @@ build-backend = "hatchling.build"
 
 [project]
 name = "whydiff"
-version = "0.0.1"
+version = "0.1.0.dev0"
 description = "Diff tables across databases and explain why they differ."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.10"
-authors = [{ name = "ALEKSEI DONSKIKH", email = "donskikhalexey@gmail.com" }]
+authors = [{ name = "YOUR NAME", email = "you@example.com" }]
 keywords = [
     "data-diff",
     "data-quality",
@@ -24,7 +24,7 @@ keywords = [
     "duckdb",
 ]
 classifiers = [
-    "Development Status :: 1 - Planning",
+    "Development Status :: 2 - Pre-Alpha",
     "Environment :: Console",
     "Intended Audience :: Developers",
     "Operating System :: OS Independent",
@@ -37,7 +37,22 @@ classifiers = [
     "Topic :: Database",
     "Topic :: Software Development :: Testing",
 ]
-dependencies = []
+dependencies = ["pydantic>=2.5"]
+
+[project.optional-dependencies]
+postgres = ["psycopg[binary]>=3.1"]
+duckdb = ["duckdb>=1.0"]
+all = ["whydiff[postgres,duckdb]"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "hypothesis>=6.100",
+    "duckdb>=1.0",
+    "psycopg[binary]>=3.1",
+    "ruff>=0.6",
+    "mypy>=1.10",
+]
 
 [project.urls]
 Homepage = "https://github.com/alekseidonskikh/whydiff"
@@ -49,3 +64,27 @@ whydiff = "whydiff.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/whydiff"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "postgres: needs a Postgres server (set WHYDIFF_TEST_PG_URI)",
+    "duckdb: needs the duckdb package",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+files = ["src"]
+
+[[tool.mypy.overrides]]
+module = ["duckdb", "duckdb.*", "psycopg", "psycopg.*"]
+ignore_missing_imports = true
