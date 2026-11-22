@@ -98,11 +98,18 @@ MIT
 
 ## Development
 
+Python runs on your machine through [uv](https://docs.astral.sh/uv/); the
+databases run in Docker.
+
 ```bash
-uv sync --group dev
-uv run pytest            # DuckDB tests run out of the box
-WHYDIFF_TEST_PG_URI=postgresql://postgres:postgres@localhost:5432/postgres uv run pytest
-uv run ruff check src tests && uv run mypy
+make setup   # .venv with dev dependencies, .env from .env.example
+make up      # Postgres 16 on localhost:5433, with demo data
+make test    # all tests, including Postgres
+make demo    # diff the demo tables orders and orders_v2
+make lint    # ruff + mypy, as in CI
+make         # list all targets
 ```
 
-A local Postgres for tests: `docker run -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:16`.
+Without make: `uv sync --group dev`, `docker compose up -d --wait`, then
+`uv run pytest` with `WHYDIFF_TEST_PG_URI` set as in `.env.example`.
+`make reset` wipes the database volume and re-runs the init scripts.
