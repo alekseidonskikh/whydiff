@@ -2,8 +2,12 @@
 
 **Diff tables across databases — and find out *why* they differ.**
 
-> 🚧 Early development: the core diff works on Postgres/Greenplum and DuckDB;
-> the API and output may still change. Star or watch the repository to follow progress.
+> [!WARNING]
+> **Work in progress — not ready for use yet.** The core diff already runs on
+> Postgres/Greenplum and DuckDB, but there is no release: the package on PyPI is
+> only a name placeholder, and the CLI, API and output will change without notice.
+> Please don't rely on it in production. Star or watch the repository to follow
+> progress; issues and ideas are welcome.
 
 Most diff tools tell you *whether* two tables match. whydiff tells you *what*
 changed, and (soon) *why*:
@@ -31,10 +35,12 @@ DIFFERENT in 2.77s
 
 Coming in 0.3: `diagnosis  created_at shifted by exactly +03:00:00 → likely a timezone mismatch`.
 
-## Install and use
+## Try it
+
+Until the first release, install from source:
 
 ```bash
-pip install "whydiff[postgres,duckdb]"
+pip install "whydiff[postgres,duckdb] @ git+https://github.com/alekseidonskikh/whydiff"
 
 whydiff diff postgresql://user@prod/db public.orders duckdb:///dev.duckdb main.orders --key id
 whydiff diff SRC TABLE TGT TABLE -k id --exclude updated_at --where "created_at >= '2024-01-01'"
