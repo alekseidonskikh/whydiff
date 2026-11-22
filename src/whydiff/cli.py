@@ -4,7 +4,7 @@ from whydiff import __version__
 
 MESSAGE = (
     f"whydiff {__version__}: the name is reserved and the tool is in early development.\n"
-    "Follow progress at https://github.com/YOUR_GITHUB/whydiff"
+    "Follow progress at https://github.com/alekseidonskikh/whydiff"
 )
 
 
