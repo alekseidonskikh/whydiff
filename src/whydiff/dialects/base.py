@@ -83,54 +83,67 @@ class Dialect(ABC):
         row = " || ".join(self.token_sql(c, rules) for c in columns)
         return self.hash60_sql(row)
 
-    def bucket_sql(self, keys: Sequence[Column], rules: NormalizationRules, buckets: int) -> str:
-        return f"({self.row_hash_sql(keys, rules)}) % {int(buckets)}"
+    def key_hash_sql(self, keys: Sequence[Column], rules: NormalizationRules) -> str:
+        """60-bit hash of the key columns; ``key_hash % modulus`` picks the segment."""
+        return self.row_hash_sql(keys, rules)
 
     @staticmethod
     def _where(where: str | None, extra: str | None = None) -> str:
         parts = [f"({p})" for p in (where, extra) if p]
         return f" where {' and '.join(parts)}" if parts else ""
 
+    @staticmethod
+    def _in_list(expr: str, ids: Sequence[int]) -> str:
+        return f"{expr} in ({', '.join(str(int(i)) for i in ids)})"
+
     def count_query(self, table: TableRef, where: str | None) -> str:
         return f"select count(*) from {self.table_sql(table)}{self._where(where)}"
 
-    def bucket_checksums_query(
+    def segment_checksums_query(
         self,
         table: TableRef,
         keys: Sequence[Column],
         columns: Sequence[Column],
         rules: NormalizationRules,
-        buckets: int,
+        modulus: int,
         where: str | None,
+        parent: tuple[int, Sequence[int]] | None = None,
     ) -> str:
-        """One row per non-empty bucket: (bucket, row count, sum of row hashes).
+        """One row per non-empty segment: (key_hash % modulus, row count, sum of row hashes).
+
+        ``parent`` = (parent_modulus, parent_ids) restricts the scan to rows whose
+        ``key_hash % parent_modulus`` is in ``parent_ids``; with ``modulus`` a
+        multiple of ``parent_modulus`` this splits those parents into children.
 
         The sum does not depend on row order, so no sorting is needed and MPP
         databases can aggregate on every segment.
         """
+        modulus = int(modulus)
+        outer = ""
+        if parent is not None:
+            outer = " where " + self._in_list(f"kh % {int(parent[0])}", parent[1])
         return (
-            "select b, count(*), sum(h) from ("
-            f"select {self.bucket_sql(keys, rules, buckets)} as b, "
+            f"select kh % {modulus} as b, count(*), sum(h) from ("
+            f"select {self.key_hash_sql(keys, rules)} as kh, "
             f"{self.row_hash_sql(columns, rules)} as h "
             f"from {self.table_sql(table)}{self._where(where)}"
-            ") t group by b"
+            f") t{outer} group by kh % {modulus}"
         )
 
-    def bucket_rows_query(
+    def segment_rows_query(
         self,
         table: TableRef,
         keys: Sequence[Column],
         columns: Sequence[Column],
         rules: NormalizationRules,
-        buckets: int,
-        bucket_ids: Sequence[int],
+        modulus: int,
+        segment_ids: Sequence[int],
         where: str | None,
     ) -> str:
-        """Normalized key and column values for rows in the given buckets."""
-        ids = ", ".join(str(int(b)) for b in bucket_ids)
+        """Normalized key and column values for rows in the given segments."""
         selected = [self.normalized_sql(c, rules) for c in (*keys, *columns)]
-        bucket_filter = f"{self.bucket_sql(keys, rules, buckets)} in ({ids})"
+        segment = self._in_list(f"({self.key_hash_sql(keys, rules)}) % {int(modulus)}", segment_ids)
         return (
             f"select {', '.join(selected)} "
-            f"from {self.table_sql(table)}{self._where(where, bucket_filter)}"
+            f"from {self.table_sql(table)}{self._where(where, segment)}"
         )

@@ -17,6 +17,8 @@ $ whydiff diff postgresql://localhost/shop orders postgresql://localhost/shop or
 
 rows     200,000 vs 199,999  (-1)
 buckets  63 of 100 differ
+bisect   1 level -> 101 differing segments
+fetched  12,913 rows
 
 removed  2   (in source only)
 added    1   (in target only)
@@ -30,7 +32,7 @@ examples
   ~ id='42'  amount: '2.94' -> '2.95'
   ~ id='5000'  created_at: '2024-01-04T11:20:00.000000' -> '2024-01-04T14:20:00.000000'
 
-DIFFERENT in 2.77s
+DIFFERENT in 2.65s
 ```
 
 Coming in 0.3: `diagnosis  created_at shifted by exactly +03:00:00 → likely a timezone mismatch`.
@@ -67,7 +69,11 @@ print(render_text(result))
    to a 60-bit integer, and rows are spread over buckets by the hash of their key.
 3. Each database returns only `count(*)` and `sum(row_hash)` per bucket. The
    sum does not depend on row order, so no sorting is needed.
-4. Only rows from buckets whose checksums differ are downloaded and compared.
+4. Differing buckets that are still large are split into 32 sub-buckets and
+   compared again (bisection), until segments hold about 64 rows. Each level
+   costs one more scan, so it runs only when it saves downloading over 10,000
+   rows. On the demo above it cuts the download from 252,547 rows to 12,913.
+5. Only rows from the differing segments are downloaded and compared.
 
 The SQL each database runs is tested against a pure-Python reference
 implementation, so the same data hashes identically everywhere.

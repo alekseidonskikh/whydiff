@@ -39,8 +39,13 @@ def render_text(result: DiffResult) -> str:
     add(f"rows     {c.source:,} vs {c.target:,}" + (f"  ({delta:+,})" if delta else ""))
     b = result.buckets
     add(f"buckets  {b.differing:,} of {b.total:,} differ")
+    if b.bisection_levels:
+        levels = "level" if b.bisection_levels == 1 else "levels"
+        add(f"bisect   {b.bisection_levels} {levels} -> {b.segments:,} differing segments")
+    if b.differing:
+        add(f"fetched  {b.rows_downloaded:,} rows")
     if result.truncated:
-        add(f"         row budget reached: inspected {b.inspected:,} of {b.differing:,}")
+        add(f"         row budget reached: inspected {b.inspected:,} of {b.segments:,} segments")
 
     if result.removed or result.added or result.changed:
         add("")

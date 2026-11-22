@@ -82,3 +82,36 @@ def test_normalized_values_and_hashes_match_reference(
         want = [normalize_value(v, c, rules) for v, c in zip(expected_row, columns, strict=True)]
         assert [None if v is None else str(v) for v in got_row[:-1]] == want
         assert int(got_row[-1]) == row_hash(expected_row, columns, rules)
+
+
+@pytest.mark.parametrize("modulus", [7, 7 * 32, 2**40 + 3])
+def test_segment_ids_match_reference(backend: Any, modulus: int) -> None:
+    table = create_typed_table(backend)
+    columns = get_columns(backend, TableRef(None, table))
+    keys = [columns[0], columns[3]]  # composite key (id, s) with NULLs and unicode
+    rules = NormalizationRules()
+    d = backend.dialect
+    got = backend.execute(
+        f"select ({d.key_hash_sql(keys, rules)}) % {modulus} from {table} order by id"
+    )
+    want = [row_hash((r[0], r[3]), keys, rules) % modulus for r in ROWS]
+    assert [int(g[0]) for g in got] == want
+
+
+def test_child_segments_partition_their_parent(backend: Any) -> None:
+    """Checksums of children restricted to a parent add up to the parent's."""
+    table = create_typed_table(backend)
+    columns = get_columns(backend, TableRef(None, table))
+    ref, rules, d = TableRef(None, table), NormalizationRules(), backend.dialect
+    keys = columns[:1]
+
+    def sums(modulus: int, parent: tuple[int, list[int]] | None) -> dict[int, tuple[int, int]]:
+        sql = d.segment_checksums_query(ref, keys, columns, rules, modulus, None, parent)
+        return {int(b): (int(n), int(h)) for b, n, h in backend.execute(sql)}
+
+    parents = sums(2, None)
+    for pid, (count, total) in parents.items():
+        children = sums(8, (2, [pid]))
+        assert all(c % 2 == pid for c in children)
+        assert sum(n for n, _ in children.values()) == count
+        assert sum(h for _, h in children.values()) == total

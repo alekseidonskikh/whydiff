@@ -51,6 +51,16 @@ def _parser() -> argparse.ArgumentParser:
     d.add_argument("--trim", action="store_true", help="ignore leading and trailing spaces")
     d.add_argument("--ignore-case", action="store_true", help="compare strings case-insensitively")
     d.add_argument("--bucket-size", type=int, default=2000, help="target rows per bucket")
+    d.add_argument(
+        "--leaf-size", type=int, default=64, help="stop bisecting segments at this many rows"
+    )
+    d.add_argument(
+        "--bisection-threshold",
+        type=int,
+        default=10_000,
+        help="bisect only when it saves downloading more rows than this",
+    )
+    d.add_argument("--no-bisect", action="store_true", help="download whole differing buckets")
     d.add_argument("--max-rows", type=int, default=1_000_000, help="row budget for drill-down")
     d.add_argument("--samples", type=int, default=10, help="examples shown per kind of difference")
     d.add_argument("--json", action="store_true", help="print the result as JSON")
@@ -82,6 +92,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 where=args.where,
                 target_where=args.target_where,
                 bucket_size=args.bucket_size,
+                leaf_size=args.leaf_size,
+                bisection_threshold=args.bisection_threshold,
+                max_bisection_levels=0 if args.no_bisect else 4,
                 max_rows=args.max_rows,
                 sample_limit=args.samples,
             )

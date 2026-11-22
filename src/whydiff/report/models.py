@@ -38,9 +38,12 @@ class RowCounts(BaseModel):
 
 
 class BucketStats(BaseModel):
-    total: int
-    differing: int
-    inspected: int
+    total: int = Field(description="Buckets in the first pass.")
+    differing: int = Field(description="Buckets whose checksums differ in the first pass.")
+    bisection_levels: int = Field(default=0, description="Extra passes that split buckets.")
+    segments: int = Field(default=0, description="Differing segments after bisection.")
+    inspected: int = Field(default=0, description="Segments downloaded and compared.")
+    rows_downloaded: int = Field(default=0, description="Rows fetched from both sides.")
 
 
 class ColumnChange(BaseModel):
@@ -75,6 +78,6 @@ class DiffResult(BaseModel):
     samples: list[RowSample] = Field(default_factory=list)
     truncated: bool = Field(
         default=False,
-        description="True when not every differing bucket was inspected row by row.",
+        description="True when not every differing segment was inspected row by row.",
     )
     elapsed_seconds: float = 0.0

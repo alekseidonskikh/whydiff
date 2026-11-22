@@ -125,12 +125,40 @@ def test_row_budget_truncates(backend: Any) -> None:
     a, b = make_table(backend, rows), make_table(backend, changed)
     result = diff_tables(backend, a, backend, b, ["id"], bucket_size=40, max_rows=100)
     assert result.truncated
-    assert result.buckets.inspected < result.buckets.differing
+    assert result.buckets.inspected < result.buckets.segments
     assert 0 < result.changed < 400
 
 
+def test_bisection_downloads_far_fewer_rows(backend: Any) -> None:
+    rng = random.Random(5)
+    rows = random_rows(rng, 20_000)
+    edited = set(rng.sample(range(20_000), 20))
+    target = [(r[0], "edited", r[2], r[3], r[4]) if r[0] in edited else r for r in rows]
+    a, b = make_table(backend, rows), make_table(backend, target)
+
+    plain = diff_tables(backend, a, backend, b, ["id"], max_bisection_levels=0)
+    bisected = diff_tables(backend, a, backend, b, ["id"])
+
+    assert plain.changed == bisected.changed == 20
+    assert plain.buckets.bisection_levels == 0
+    assert bisected.buckets.bisection_levels >= 1
+    assert 0 < bisected.buckets.segments <= 20  # two edits may share a segment
+    assert bisected.buckets.rows_downloaded * 10 < plain.buckets.rows_downloaded
+    assert "bisect" in render_text(bisected)
+
+
+def test_bisection_skipped_when_download_is_cheap(backend: Any) -> None:
+    rows = random_rows(random.Random(6), 300)
+    target = [(r[0], "x", r[2], r[3], r[4]) if r[0] == 5 else r for r in rows]
+    a, b = make_table(backend, rows), make_table(backend, target)
+    result = diff_tables(backend, a, backend, b, ["id"])
+    assert result.buckets.bisection_levels == 0
+    assert result.changed == 1
+
+
 @pytest.mark.parametrize("seed", range(5))
-def test_random_mutations_are_found_exactly(backend: Any, seed: int) -> None:
+@pytest.mark.parametrize("bisect", [False, True], ids=["plain", "bisect"])
+def test_random_mutations_are_found_exactly(backend: Any, seed: int, bisect: bool) -> None:
     """Apply random removals, additions and edits; the diff must report exactly them."""
     rng = random.Random(seed)
     rows = random_rows(rng, rng.randint(50, 800))
@@ -155,7 +183,16 @@ def test_random_mutations_are_found_exactly(backend: Any, seed: int) -> None:
     rng.shuffle(target)
 
     a, b = make_table(backend, rows), make_table(backend, target)
-    result = diff_tables(backend, a, backend, b, ["id"], bucket_size=rng.choice([1, 7, 64, 5000]))
+    options: dict[str, Any] = {"bucket_size": rng.choice([1, 7, 64, 5000])}
+    if bisect:  # force deep bisection even on small tables
+        options.update(
+            bisection_threshold=0,
+            leaf_size=rng.choice([1, 4, 16]),
+            bisection_factor=rng.choice([2, 3, 32]),
+        )
+    else:
+        options["max_bisection_levels"] = 0
+    result = diff_tables(backend, a, backend, b, ["id"], **options)
     assert (result.removed, result.added, result.changed) == (len(removed), len(added), real_edits)
     expected = Status.IDENTICAL if not (removed or added or real_edits) else Status.DIFFERENT
     assert result.status is expected
