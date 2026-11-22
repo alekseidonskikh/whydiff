@@ -1,0 +1,51 @@
+[build-system]
+requires = ["hatchling>=1.21"]
+build-backend = "hatchling.build"
+
+[project]
+name = "whydiff"
+version = "0.0.1"
+description = "Diff tables across databases and explain why they differ."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+authors = [{ name = "ALEKSEI DONSKIKH", email = "donskikhalexey@gmail.com" }]
+keywords = [
+    "data-diff",
+    "data-quality",
+    "data-engineering",
+    "reconciliation",
+    "database",
+    "postgres",
+    "greenplum",
+    "clickhouse",
+    "snowflake",
+    "duckdb",
+]
+classifiers = [
+    "Development Status :: 1 - Planning",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Database",
+    "Topic :: Software Development :: Testing",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/alekseidonskikh/whydiff"
+Repository = "https://github.com/alekseidonskikh/whydiff"
+Issues = "https://github.com/alekseidonskikh/whydiff/issues"
+
+[project.scripts]
+whydiff = "whydiff.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/whydiff"]
