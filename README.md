@@ -47,9 +47,12 @@ pip install "whydiff[postgres,duckdb] @ git+https://github.com/alekseidonskikh/w
 whydiff diff postgresql://user@prod/db public.orders duckdb:///dev.duckdb main.orders --key id
 whydiff diff SRC TABLE TGT TABLE -k id --exclude updated_at --where "created_at >= '2024-01-01'"
 whydiff diff SRC TABLE TGT TABLE -k id --timestamp-precision 3 --trim --json
+whydiff diff SRC TABLE TGT TABLE -k id -v     # progress on stderr; -vv also logs every SQL query
 ```
 
-Exit codes: `0` identical, `1` different, `2` error — ready for CI.
+Exit codes: `0` identical, `1` different, `2` error — ready for CI. The report
+goes to stdout, logs and errors to stderr, and passwords in connection strings
+are hidden in both.
 
 From Python:
 

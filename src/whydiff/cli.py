@@ -1,23 +1,32 @@
 """Command line: ``whydiff diff SOURCE TABLE TARGET TABLE --key id``.
 
 Exit codes: 0 identical, 1 different, 2 error.
+The report goes to stdout; logs (``-v``, ``-vv``) and errors go to stderr.
 """
 
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from collections.abc import Sequence
 
-from whydiff import __version__
+from whydiff import __version__, defaults
 from whydiff.connectors import connect
 from whydiff.engine import diff_tables
+from whydiff.log import configure_logging, get_logger, redact
 from whydiff.normalize import NormalizationRules
 from whydiff.report import Status, render_text
 
 
 def _split(values: Sequence[str] | None) -> list[str]:
     return [v.strip() for item in values or () for v in item.split(",") if v.strip()]
+
+
+log = get_logger("cli")
+
+#: Log verbosity without -v/-q: 0 warnings, 1 info, 2 debug.
+VERBOSITY_ENV = "WHYDIFF_VERBOSITY"
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -32,6 +41,15 @@ def _parser() -> argparse.ArgumentParser:
     d.add_argument("source_table", help="table or schema.table")
     d.add_argument("target", help="target database URI, e.g. duckdb:///dev.duckdb")
     d.add_argument("target_table", help="table or schema.table")
+    noise = d.add_mutually_exclusive_group()
+    noise.add_argument(
+        "-v",
+        "--verbose",
+        action="count",
+        default=None,
+        help="log progress to stderr; -vv also logs every SQL query",
+    )
+    noise.add_argument("-q", "--quiet", action="store_true", help="log errors only")
     d.add_argument(
         "-k",
         "--key",
@@ -44,31 +62,69 @@ def _parser() -> argparse.ArgumentParser:
     d.add_argument("-w", "--where", help="filter applied to both tables (SQL)")
     d.add_argument("--target-where", help="separate filter for the target table")
     d.add_argument(
-        "--timestamp-precision", type=int, default=6, help="fractional second digits kept"
+        "--timestamp-precision",
+        type=int,
+        default=defaults.TIMESTAMP_PRECISION,
+        help="fractional second digits kept (default: %(default)s)",
     )
     d.add_argument("--decimal-scale", type=int, help="digits after the point for decimals")
-    d.add_argument("--float-digits", type=int, default=6, help="digits after the point for floats")
+    d.add_argument(
+        "--float-digits",
+        type=int,
+        default=defaults.FLOAT_DIGITS,
+        help="digits after the point for floats (default: %(default)s)",
+    )
     d.add_argument("--trim", action="store_true", help="ignore leading and trailing spaces")
     d.add_argument("--ignore-case", action="store_true", help="compare strings case-insensitively")
-    d.add_argument("--bucket-size", type=int, default=2000, help="target rows per bucket")
     d.add_argument(
-        "--leaf-size", type=int, default=64, help="stop bisecting segments at this many rows"
+        "--bucket-size",
+        type=int,
+        default=defaults.BUCKET_SIZE,
+        help="target rows per bucket (default: %(default)s)",
+    )
+    d.add_argument(
+        "--leaf-size",
+        type=int,
+        default=defaults.LEAF_SIZE,
+        help="stop bisecting segments at this many rows (default: %(default)s)",
     )
     d.add_argument(
         "--bisection-threshold",
         type=int,
-        default=10_000,
-        help="bisect only when it saves downloading more rows than this",
+        default=defaults.BISECTION_THRESHOLD,
+        help="bisect only when it saves downloading more rows than this (default: %(default)s)",
     )
     d.add_argument("--no-bisect", action="store_true", help="download whole differing buckets")
-    d.add_argument("--max-rows", type=int, default=1_000_000, help="row budget for drill-down")
-    d.add_argument("--samples", type=int, default=10, help="examples shown per kind of difference")
+    d.add_argument(
+        "--max-rows",
+        type=int,
+        default=defaults.MAX_ROWS,
+        help="rows downloaded per side at most (default: %(default)s)",
+    )
+    d.add_argument(
+        "--samples",
+        type=int,
+        default=defaults.SAMPLE_LIMIT,
+        help="examples shown per kind of difference (default: %(default)s)",
+    )
     d.add_argument("--json", action="store_true", help="print the result as JSON")
     return parser
 
 
+def _verbosity(args: argparse.Namespace) -> int:
+    if args.quiet:
+        return -1
+    if args.verbose is not None:
+        return int(args.verbose)
+    try:
+        return int(os.environ.get(VERBOSITY_ENV, "0"))
+    except ValueError:
+        return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    configure_logging(_verbosity(args))
     try:
         rules = NormalizationRules(
             timestamp_precision=args.timestamp_precision,
@@ -94,7 +150,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 bucket_size=args.bucket_size,
                 leaf_size=args.leaf_size,
                 bisection_threshold=args.bisection_threshold,
-                max_bisection_levels=0 if args.no_bisect else 4,
+                max_bisection_levels=0 if args.no_bisect else defaults.MAX_BISECTION_LEVELS,
                 max_rows=args.max_rows,
                 sample_limit=args.samples,
             )
@@ -103,7 +159,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             if target is not source:
                 target.close()
     except Exception as exc:
-        print(f"whydiff: error: {exc}", file=sys.stderr)
+        # drivers may echo the connection string, so passwords are hidden
+        print(f"whydiff: error: {redact(str(exc))}", file=sys.stderr)
+        log.debug("traceback", exc_info=True)
         return 2
     print(result.model_dump_json(indent=2) if args.json else render_text(result))
     return 0 if result.status is Status.IDENTICAL else 1

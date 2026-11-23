@@ -25,7 +25,10 @@ from dataclasses import dataclass, replace
 from functools import partial
 from typing import Any, TypeVar
 
-from whydiff.connectors.base import Connector, get_columns
+from whydiff import defaults
+from whydiff.connectors.base import Connector, get_columns, run_query
+from whydiff.constants import HASH_SPACE, IDS_PER_QUERY, MAX_BUCKETS
+from whydiff.log import get_logger
 from whydiff.model import Column, TableRef, TypeFamily
 from whydiff.normalize.rules import NormalizationRules
 from whydiff.report.models import (
@@ -39,9 +42,8 @@ from whydiff.report.models import (
     TypeMismatch,
 )
 
-MAX_BUCKETS = 1 << 18
-HASH_SPACE = 1 << 60  # key hashes are 60-bit, so moduli beyond this split nothing
-IDS_PER_QUERY = 10_000
+log = get_logger("engine")
+
 _NUMERIC_RANK = {TypeFamily.INTEGER: 0, TypeFamily.DECIMAL: 1, TypeFamily.FLOAT: 2}
 
 T = TypeVar("T")
@@ -134,6 +136,7 @@ def _chunks(items: Sequence[T], size: int) -> Iterable[Sequence[T]]:
 class _Side:
     """One table to compare, with its columns resolved and harmonized."""
 
+    name: str  # "source" or "target", for logs
     conn: Connector
     table: TableRef
     keys: list[Column]
@@ -155,7 +158,8 @@ class _Side:
             sql = d.segment_checksums_query(
                 self.table, self.keys, self.columns, rules, modulus, self.where, p
             )
-            result.update({int(b): (int(n), int(h)) for b, n, h in self.conn.execute(sql)})
+            rows = run_query(self.conn, sql, f"{self.name} checksums % {modulus}")
+            result.update({int(b): (int(n), int(h)) for b, n, h in rows})
         return result
 
     def rows(self, rules: NormalizationRules, segments: Sequence[_Segment]) -> list[Row]:
@@ -169,9 +173,8 @@ class _Side:
                 sql = d.segment_rows_query(
                     self.table, self.keys, self.values, rules, modulus, chunk, self.where
                 )
-                rows.extend(
-                    tuple(None if v is None else str(v) for v in r) for r in self.conn.execute(sql)
-                )
+                fetched = run_query(self.conn, sql, f"{self.name} rows % {modulus}")
+                rows.extend(tuple(None if v is None else str(v) for v in r) for r in fetched)
         return rows
 
 
@@ -207,13 +210,13 @@ def diff_tables(
     rules: NormalizationRules | None = None,
     where: str | None = None,
     target_where: str | None = None,
-    bucket_size: int = 2000,
-    leaf_size: int = 64,
-    bisection_factor: int = 32,
-    bisection_threshold: int = 10_000,
-    max_bisection_levels: int = 4,
-    max_rows: int = 1_000_000,
-    sample_limit: int = 10,
+    bucket_size: int = defaults.BUCKET_SIZE,
+    leaf_size: int = defaults.LEAF_SIZE,
+    bisection_factor: int = defaults.BISECTION_FACTOR,
+    bisection_threshold: int = defaults.BISECTION_THRESHOLD,
+    max_bisection_levels: int = defaults.MAX_BISECTION_LEVELS,
+    max_rows: int = defaults.MAX_ROWS,
+    sample_limit: int = defaults.SAMPLE_LIMIT,
 ) -> DiffResult:
     """Diff two tables. ``where`` applies to both sides unless ``target_where`` is given.
 
@@ -231,11 +234,24 @@ def diff_tables(
         raise ValueError("At least one key column is required")
     if bisection_factor < 2:
         raise ValueError("bisection_factor must be at least 2")
+    if bucket_size < 1:
+        raise ValueError("bucket_size must be at least 1")
     parallel = source is not target
+    log.info(
+        "diff %s:%s -> %s:%s, key %s",
+        source.dialect.name,
+        src_ref,
+        target.dialect.name,
+        tgt_ref,
+        ", ".join(key),
+    )
+    log.debug("normalization: %s", rules.model_dump())
 
     # 1. schema
     src_cols, tgt_cols = _both(
-        parallel, lambda: get_columns(source, src_ref), lambda: get_columns(target, tgt_ref)
+        parallel,
+        lambda: get_columns(source, src_ref, "source columns"),
+        lambda: get_columns(target, tgt_ref, "target columns"),
     )
     key_lower = [k.lower() for k in key]
     excluded = {e.lower() for e in exclude}
@@ -251,7 +267,19 @@ def diff_tables(
     if columns:
         schema.compared_columns = [p.name for p in values]
     compared = [*keys, *values]
+    log.info(
+        "schema: %d columns compared, %d only in source, %d only in target, %d type mismatches",
+        len(compared),
+        len(schema.only_in_source),
+        len(schema.only_in_target),
+        len(schema.type_mismatches),
+    )
+    for m in schema.type_mismatches:
+        log.info(
+            "  %s: %s vs %s, compared as %s", m.column, m.source_type, m.target_type, m.compared_as
+        )
     src = _Side(
+        "source",
         source,
         src_ref,
         [p.source for p in keys],
@@ -260,6 +288,7 @@ def diff_tables(
         where,
     )
     tgt = _Side(
+        "target",
         target,
         tgt_ref,
         [p.target for p in keys],
@@ -272,10 +301,11 @@ def diff_tables(
     sd, td = source.dialect, target.dialect
     n_src, n_tgt = _both(
         parallel,
-        lambda: int(source.execute(sd.count_query(src_ref, where))[0][0]),
-        lambda: int(target.execute(td.count_query(tgt_ref, tgt_where))[0][0]),
+        lambda: int(run_query(source, sd.count_query(src_ref, where), "source count")[0][0]),
+        lambda: int(run_query(target, td.count_query(tgt_ref, tgt_where), "target count")[0][0]),
     )
     buckets = max(1, min(MAX_BUCKETS, math.ceil(max(n_src, n_tgt) / bucket_size)))
+    log.info("rows: %s in source, %s in target", f"{n_src:,}", f"{n_tgt:,}")
 
     # 3. bucket checksums
     first = _differing(
@@ -286,6 +316,12 @@ def diff_tables(
             lambda: tgt.checksums(rules, buckets, None),
         ),
     )
+    log.info(
+        "pass 1: %s of %s buckets differ (%s rows)",
+        f"{len(first):,}",
+        f"{buckets:,}",
+        f"{sum(seg.size for seg in first):,}",
+    )
 
     # 4. bisection
     leaves: list[_Segment] = []
@@ -293,13 +329,22 @@ def diff_tables(
     while current:
         large = [seg for seg in current if seg.size > leaf_size]
         leaves.extend(seg for seg in current if seg.size <= leaf_size)
-        if (
-            not large
-            or levels >= max_bisection_levels
-            or modulus * bisection_factor > HASH_SPACE
-            or sum(seg.size for seg in large) <= bisection_threshold
-        ):
+        large_rows = sum(seg.size for seg in large)
+        stop = (
+            "no segment above leaf size"
+            if not large
+            else f"level limit {max_bisection_levels} reached"
+            if levels >= max_bisection_levels
+            else "hash space exhausted"
+            if modulus * bisection_factor > HASH_SPACE
+            else f"{large_rows:,} rows to fetch, not above threshold {bisection_threshold:,}"
+            if large_rows <= bisection_threshold
+            else None
+        )
+        if stop:
             leaves.extend(large)
+            if large or levels:
+                log.info("bisection stops: %s", stop)
             break
         parent = (modulus, [seg.id for seg in large])
         modulus *= bisection_factor
@@ -312,6 +357,14 @@ def diff_tables(
             ),
         )
         levels += 1
+        log.info(
+            "bisection level %d: %s segments split into %s, %s differ (%s rows)",
+            levels,
+            f"{len(large):,}",
+            f"{len(large) * bisection_factor:,}",
+            f"{len(current):,}",
+            f"{sum(seg.size for seg in current):,}",
+        )
 
     # 5. download within the row budget, then compare row by row
     selected: list[_Segment] = []
@@ -321,9 +374,22 @@ def diff_tables(
             break
         selected.append(seg)
         budget += seg.size
+    if len(selected) < len(leaves):
+        log.warning(
+            "row budget of %s rows reached: inspecting %s of %s differing segments",
+            f"{max_rows:,}",
+            f"{len(selected):,}",
+            f"{len(leaves):,}",
+        )
     rows_src, rows_tgt = _both(
         parallel, lambda: src.rows(rules, selected), lambda: tgt.rows(rules, selected)
     )
+    if selected:
+        log.info(
+            "fetched %s rows from %s segments",
+            f"{len(rows_src) + len(rows_tgt):,}",
+            f"{len(selected):,}",
+        )
 
     result = DiffResult(
         status=Status.IDENTICAL,
@@ -348,6 +414,22 @@ def diff_tables(
     if first or n_src != n_tgt or schema.differs:
         result.status = Status.DIFFERENT
     result.elapsed_seconds = round(time.perf_counter() - started, 3)
+    for label, n in (
+        ("source", result.duplicate_keys_source),
+        ("target", result.duplicate_keys_target),
+    ):
+        if n:
+            log.warning(
+                "%s duplicate keys in %s; results for them are approximate", f"{n:,}", label
+            )
+    log.info(
+        "%s: %s removed, %s added, %s changed in %.2fs",
+        result.status.value,
+        f"{result.removed:,}",
+        f"{result.added:,}",
+        f"{result.changed:,}",
+        result.elapsed_seconds,
+    )
     return result
 
 

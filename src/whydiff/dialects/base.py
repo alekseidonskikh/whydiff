@@ -14,6 +14,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 
+from whydiff.constants import LENGTH_SEPARATOR, NULL_TOKEN
 from whydiff.model import Column, TableRef, TypeFamily
 from whydiff.normalize.rules import NormalizationRules
 
@@ -75,7 +76,9 @@ class Dialect(ABC):
 
     def token_sql(self, column: Column, rules: NormalizationRules) -> str:
         value = self.normalized_sql(column, rules)
-        return f"coalesce({self.byte_length_text_sql(value)} || ':' || {value}, 'N')"
+        length = self.byte_length_text_sql(value)
+        separator, null = self.literal(LENGTH_SEPARATOR), self.literal(NULL_TOKEN)
+        return f"coalesce({length} || {separator} || {value}, {null})"
 
     def row_hash_sql(self, columns: Sequence[Column], rules: NormalizationRules) -> str:
         if not columns:

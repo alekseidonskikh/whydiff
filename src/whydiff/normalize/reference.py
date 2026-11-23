@@ -8,11 +8,13 @@ Row encoding
 ------------
 Each value is normalized to a string ``v`` and encoded as a token:
 
-* ``NULL``      -> ``N``
+* ``NULL``      -> ``<<NULL>>`` (:data:`whydiff.constants.NULL_TOKEN`)
 * otherwise     -> ``<byte length of v>:<v>``
 
 Tokens are concatenated. Length prefixes make the encoding unambiguous, so
-``('a|', 'b')`` and ``('a', '|b')``, or ``NULL`` and ``''``, never collide.
+``('a|', 'b')`` and ``('a', '|b')`` never collide, and since a value token
+always starts with a digit, the NULL token never collides with any value:
+``NULL``, ``''`` and the string ``'<<NULL>>'`` all hash differently.
 
 The row hash is the first 15 hex digits (60 bits) of ``md5(row)`` read as an
 integer: it fits a signed BIGINT in every database, and sums of many of them
@@ -27,11 +29,9 @@ from collections.abc import Sequence
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
+from whydiff.constants import HASH_HEX_DIGITS, LENGTH_SEPARATOR, NULL_TOKEN
 from whydiff.model import Column, TypeFamily
 from whydiff.normalize.rules import NormalizationRules
-
-NULL_TOKEN = "N"
-HASH_HEX_DIGITS = 15
 
 
 def _fixed(value: Decimal, digits: int) -> str:
@@ -83,7 +83,7 @@ def normalize_value(value: Any, column: Column, rules: NormalizationRules) -> st
 def encode_token(normalized: str | None) -> str:
     if normalized is None:
         return NULL_TOKEN
-    return f"{len(normalized.encode('utf-8'))}:{normalized}"
+    return f"{len(normalized.encode('utf-8'))}{LENGTH_SEPARATOR}{normalized}"
 
 
 def hash_text(text: str) -> int:
