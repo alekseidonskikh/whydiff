@@ -197,3 +197,19 @@ def test_random_mutations_are_found_exactly(backend: Any, seed: int, bisect: boo
     assert (result.removed, result.added, result.changed) == (len(removed), len(added), real_edits)
     expected = Status.IDENTICAL if not (removed or added or real_edits) else Status.DIFFERENT
     assert result.status is expected
+
+
+def test_diagnosis_end_to_end(backend: Any) -> None:
+    """A +3 hour shift in a block of keys is diagnosed as a time zone mismatch in that range."""
+    rows = random_rows(random.Random(12), 5000)
+    shifted = {r[0] for r in rows if 2000 <= r[0] < 2050 and r[3] is not None}
+    target = [
+        (r[0], r[1], r[2], r[3] + dt.timedelta(hours=3), r[4]) if r[0] in shifted and r[3] else r
+        for r in rows
+    ]
+    a, b = make_table(backend, rows), make_table(backend, target)
+    result = diff_tables(backend, a, backend, b, ["id"])
+    found = {(d.kind, d.column) for d in result.diagnoses}
+    assert ("timezone", "created_at") in found
+    assert ("range", "id") in found
+    assert "time zone" in render_text(result)
