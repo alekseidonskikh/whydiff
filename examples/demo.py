@@ -37,7 +37,9 @@ def run(source: Connector, target: Connector) -> DiffResult:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser = argparse.ArgumentParser(
+        description="Diff the demo tables from the Python API, with logging."
+    )
     parser.add_argument("--debug", action="store_true", help="log every SQL query")
     parser.add_argument("--uri", default=os.environ.get("WHYDIFF_PG_URI", DEMO_URI))
     args = parser.parse_args()
