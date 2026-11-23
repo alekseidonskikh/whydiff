@@ -22,7 +22,7 @@ class PostgresConnector:
 
     def execute(self, sql: str) -> Sequence[Sequence[Any]]:
         with self._conn.cursor() as cur:
-            cur.execute(sql)  # type: ignore[arg-type,unused-ignore]
+            cur.execute(sql)
             rows: Sequence[Sequence[Any]] = cur.fetchall()
             return rows
 
