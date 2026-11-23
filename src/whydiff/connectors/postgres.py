@@ -18,11 +18,19 @@ class PostgresConnector:
             ) from exc
         self.dialect = PostgresDialect()
         self._conn = psycopg.connect(dsn, autocommit=True)
-        self._conn.read_only = True
+        # Connection.read_only only affects transactions psycopg opens itself,
+        # and in autocommit mode it opens none, so it would be silently ignored.
+        # The session default applies to every statement, autocommit or not.
+        self._conn.execute(b"set default_transaction_read_only = on")
 
     def execute(self, sql: str) -> Sequence[Sequence[Any]]:
+        # psycopg only takes literal strings, bytes or psycopg.sql objects as queries,
+        # to steer code away from SQL built with f-strings. Our queries are built
+        # by the dialect, with identifiers quoted and literals escaped, so they
+        # are passed as bytes in the connection's encoding.
+        query = sql.encode(self._conn.info.encoding)
         with self._conn.cursor() as cur:
-            cur.execute(sql)  # type: ignore[arg-type,unused-ignore]
+            cur.execute(query)
             rows: Sequence[Sequence[Any]] = cur.fetchall()
             return rows
 

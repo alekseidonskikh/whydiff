@@ -3,6 +3,7 @@ from decimal import Decimal
 
 import pytest
 
+from whydiff.constants import NULL_TOKEN
 from whydiff.model import Column, TableRef, TypeFamily
 from whydiff.normalize import NormalizationRules, encode_token, hash_normalized, normalize_value
 
@@ -16,6 +17,14 @@ def col(family: TypeFamily, scale: int | None = None) -> Column:
 def test_null_and_empty_string_differ() -> None:
     assert hash_normalized([None]) != hash_normalized([""])
     assert hash_normalized(["N"]) != hash_normalized([None])
+
+
+def test_null_token_never_collides_with_a_value() -> None:
+    assert encode_token(None) == NULL_TOKEN
+    assert encode_token(NULL_TOKEN) == f"{len(NULL_TOKEN)}:{NULL_TOKEN}"
+    assert hash_normalized([NULL_TOKEN]) != hash_normalized([None])
+    # a value token always starts with its length, so never with the NULL token
+    assert not encode_token("anything").startswith(NULL_TOKEN[0])
 
 
 def test_encoding_is_unambiguous_across_column_boundaries() -> None:

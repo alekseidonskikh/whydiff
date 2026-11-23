@@ -42,7 +42,7 @@ class PsycopgBackend:
 
     def execute(self, sql: str) -> Sequence[Sequence[Any]]:
         with self._conn.cursor() as cur:
-            cur.execute(sql)
+            cur.execute(sql.encode(self._conn.info.encoding))
             return cur.fetchall() if cur.description else []
 
     def close(self) -> None:

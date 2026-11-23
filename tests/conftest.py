@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import logging
 from collections.abc import Iterator
 from typing import Any
 
@@ -43,3 +44,12 @@ def postgres() -> Iterator[Any]:
         pytest.skip("set WHYDIFF_TEST_PG_URI or WHYDIFF_TEST_PG_PSQL to run Postgres tests")
     yield conn
     conn.close()
+
+
+@pytest.fixture(autouse=True)
+def _restore_whydiff_logger() -> Iterator[None]:
+    """The CLI configures the package logger; undo that after each test."""
+    logger = logging.getLogger("whydiff")
+    saved = (logger.handlers[:], logger.level, logger.propagate)
+    yield
+    logger.handlers[:], logger.level, logger.propagate = saved
