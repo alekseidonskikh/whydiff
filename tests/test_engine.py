@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 import random
+from collections.abc import Sequence
 from decimal import Decimal
 from typing import Any
 
@@ -26,7 +27,7 @@ def literal(value: Any) -> str:
     return "'" + str(value).replace("'", "''") + "'"
 
 
-def make_table(conn: Any, rows: list[Row], ddl: str = DDL) -> str:
+def make_table(conn: Any, rows: Sequence[tuple[Any, ...]], ddl: str = DDL) -> str:
     name = unique_name("t")
     conn.execute(f"create table {name} {ddl}")
     for i in range(0, len(rows), 1000):
