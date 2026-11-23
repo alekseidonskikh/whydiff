@@ -21,8 +21,13 @@ class PostgresConnector:
         self._conn.read_only = True
 
     def execute(self, sql: str) -> Sequence[Sequence[Any]]:
+        # psycopg only takes literal strings, bytes or psycopg.sql objects as queries,
+        # to steer code away from SQL built with f-strings. Our queries are built
+        # by the dialect, with identifiers quoted and literals escaped, so they
+        # are passed as bytes in the connection's encoding.
+        query = sql.encode(self._conn.info.encoding)
         with self._conn.cursor() as cur:
-            cur.execute(sql)
+            cur.execute(query)
             rows: Sequence[Sequence[Any]] = cur.fetchall()
             return rows
 
