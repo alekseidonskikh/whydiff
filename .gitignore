@@ -12,3 +12,4 @@ build/
 htmlcov/
 *.duckdb
 .env
+demo-result.json

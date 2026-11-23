@@ -8,7 +8,7 @@ WHYDIFF_PG_URI ?= postgresql://whydiff:whydiff@localhost:$(WHYDIFF_PG_PORT)/whyd
 WHYDIFF_TEST_PG_URI ?= postgresql://whydiff:whydiff@localhost:$(WHYDIFF_PG_PORT)/whydiff_test
 
 .DEFAULT_GOAL := help
-.PHONY: help setup up down reset logs psql test test-fast lint fmt demo
+.PHONY: help setup up down reset logs psql test test-fast lint fmt demo demo-api
 
 help: ## show this help
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  make %-10s %s\n", $$1, $$2}'
@@ -40,13 +40,16 @@ test-fast: ## run tests without Postgres
 	WHYDIFF_TEST_PG_URI= uv run pytest
 
 lint: ## ruff, formatting check and mypy, as in CI
-	uv run ruff check src tests
-	uv run ruff format --check src tests
+	uv run ruff check src tests examples
+	uv run ruff format --check src tests examples
 	uv run mypy
 
 fmt: ## format code and fix lint issues
-	uv run ruff format src tests
-	uv run ruff check --fix src tests
+	uv run ruff format src tests examples
+	uv run ruff check --fix src tests examples
 
-demo: ## diff the demo tables orders and orders_v2
-	-uv run whydiff diff $(WHYDIFF_PG_URI) public.orders $(WHYDIFF_PG_URI) public.orders_v2 --key id
+demo: ## diff the demo tables; pass flags with ARGS, e.g. make demo ARGS=-v
+	-uv run whydiff diff $(WHYDIFF_PG_URI) public.orders $(WHYDIFF_PG_URI) public.orders_v2 --key id $(ARGS)
+
+demo-api: ## the same diff from Python (examples/demo.py), with logging
+	-uv run python examples/demo.py $(ARGS)
