@@ -95,5 +95,7 @@ def test_boolean() -> None:
 def test_table_ref() -> None:
     assert TableRef.parse("s.t") == TableRef("s", "t")
     assert TableRef.parse("t") == TableRef(None, "t")
-    with pytest.raises(ValueError):
-        TableRef.parse("a.b.c")
+    assert TableRef.parse(" s . t ") == TableRef("s", "t")
+    for bad in ("a.b.c", "", "s.", ".t", " . "):
+        with pytest.raises(ValueError):
+            TableRef.parse(bad)

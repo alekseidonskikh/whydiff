@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
 
+# a new push to the same branch or PR cancels the run it makes outdated
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest

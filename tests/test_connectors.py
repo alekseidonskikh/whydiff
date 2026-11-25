@@ -45,7 +45,7 @@ def test_postgres_connector_is_read_only() -> None:
 
 
 def test_unknown_scheme() -> None:
-    with pytest.raises(ValueError, match="Unsupported"):
+    with pytest.raises(ValueError, match=r"Unsupported.*duckdb://"):
         connect("oracle://x")
     with pytest.raises(ValueError, match="URI"):
         connect("not a uri")
