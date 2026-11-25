@@ -11,6 +11,8 @@ from whydiff.log import get_logger, redact
 
 log = get_logger("connect")
 
+SUPPORTED_SCHEMES = ("postgresql", "postgres", "greenplum", "duckdb")
+
 
 def connect(uri: str) -> Connector:
     scheme, sep, rest = uri.partition("://")
@@ -29,9 +31,10 @@ def connect(uri: str) -> Connector:
 
         conn = DuckDBConnector(rest or ":memory:")
     else:
-        raise ValueError(f"Unsupported database scheme {scheme!r}")
+        supported = ", ".join(f"{s}://" for s in SUPPORTED_SCHEMES)
+        raise ValueError(f"Unsupported database scheme {scheme!r}; supported: {supported}")
     log.info("connected to %s (%s)", redact(uri), conn.dialect.name)
     return conn
 
 
-__all__ = ["Connector", "connect", "get_columns", "run_query"]
+__all__ = ["SUPPORTED_SCHEMES", "Connector", "connect", "get_columns", "run_query"]

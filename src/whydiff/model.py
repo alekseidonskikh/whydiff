@@ -39,12 +39,10 @@ class TableRef:
 
     @classmethod
     def parse(cls, value: str) -> TableRef:
-        """Parse ``table`` or ``schema.table``."""
-        parts = value.split(".")
-        if len(parts) == 1:
-            return cls(schema=None, name=parts[0])
-        if len(parts) == 2:
-            return cls(schema=parts[0], name=parts[1])
+        """Parse ``table`` or ``schema.table``; surrounding spaces are ignored."""
+        parts = [part.strip() for part in value.split(".")]
+        if len(parts) in (1, 2) and all(parts):
+            return cls(schema=None, name=parts[0]) if len(parts) == 1 else cls(*parts)
         raise ValueError(f"Expected 'table' or 'schema.table', got {value!r}")
 
     def __str__(self) -> str:
