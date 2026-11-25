@@ -28,6 +28,7 @@ from typing import Any, TypeVar
 from whydiff import defaults
 from whydiff.connectors.base import Connector, get_columns, run_query
 from whydiff.constants import HASH_SPACE, IDS_PER_QUERY, MAX_BUCKETS
+from whydiff.diagnose import Affected, diagnose
 from whydiff.log import get_logger
 from whydiff.model import Column, TableRef, TypeFamily
 from whydiff.normalize.rules import NormalizationRules
@@ -410,7 +411,13 @@ def diff_tables(
         ),
         truncated=len(selected) < len(leaves),
     )
-    _compare_rows(result, rows_src, rows_tgt, len(keys), [p.name for p in compared], sample_limit)
+    names = [p.name for p in compared]
+    affected = _compare_rows(result, rows_src, rows_tgt, len(keys), names, sample_limit)
+    families = [
+        p.source.family if p.source.family is p.target.family else TypeFamily.OTHER
+        for p in compared
+    ]
+    result.diagnoses = diagnose(names, families, len(keys), affected)
     if first or n_src != n_tgt or schema.differs:
         result.status = Status.DIFFERENT
     result.elapsed_seconds = round(time.perf_counter() - started, 3)
@@ -422,6 +429,8 @@ def diff_tables(
             log.warning(
                 "%s duplicate keys in %s; results for them are approximate", f"{n:,}", label
             )
+    for d in result.diagnoses:
+        log.info("diagnosis: %s%s", f"{d.column}: " if d.column else "", d.message)
     log.info(
         "%s: %s removed, %s added, %s changed in %.2fs",
         result.status.value,
@@ -450,7 +459,8 @@ def _compare_rows(
     n_keys: int,
     names: list[str],
     sample_limit: int,
-) -> None:
+) -> Affected:
+    """Fill counts, per-column changes and samples; return the rows for diagnosis."""
     src, result.duplicate_keys_source = _index(rows_src, n_keys)
     tgt, result.duplicate_keys_target = _index(rows_tgt, n_keys)
     per_column: Counter[str] = Counter()
@@ -465,16 +475,24 @@ def _compare_rows(
                 RowSample(kind=kind, key=dict(zip(names[:n_keys], k, strict=True)), **fields)
             )
 
+    removed: list[Row] = []
+    added: list[Row] = []
+    changed_rows: list[tuple[Row, Row]] = []
+    unchanged: list[Row] = []
     for k in sorted(src.keys() - tgt.keys(), key=repr):
         result.removed += 1
+        removed.append(src[k])
         keep("removed", k, source=as_dict(src[k]))
     for k in sorted(tgt.keys() - src.keys(), key=repr):
         result.added += 1
+        added.append(tgt[k])
         keep("added", k, target=as_dict(tgt[k]))
     for k in sorted(src.keys() & tgt.keys(), key=repr):
         a, b = src[k], tgt[k]
         if a == b:
+            unchanged.append(a)
             continue
+        changed_rows.append((a, b))
         changed = [names[i] for i in range(n_keys, len(names)) if a[i] != b[i]]
         result.changed += 1
         per_column.update(changed)
@@ -484,3 +502,4 @@ def _compare_rows(
         ColumnChange(column=c, rows_changed=n) for c, n in per_column.most_common()
     ]
     result.samples = [*samples["removed"], *samples["added"], *samples["changed"]]
+    return Affected(changed=changed_rows, removed=removed, added=added, unchanged=unchanged)

@@ -59,6 +59,17 @@ class RowSample(BaseModel):
     changed_columns: list[str] = Field(default_factory=list)
 
 
+class Diagnosis(BaseModel):
+    """A likely reason for some of the differences."""
+
+    kind: str = Field(description="e.g. timezone, rounding, truncation, range, concentrated")
+    scope: str = Field(description="changed, removed or added rows")
+    column: str | None = None
+    rows: int = Field(description="Rows the finding explains.")
+    of_rows: int = Field(default=0, description="Rows it was checked against.")
+    message: str
+
+
 class DiffResult(BaseModel):
     status: Status
     source: str
@@ -76,6 +87,7 @@ class DiffResult(BaseModel):
     duplicate_keys_target: int = 0
     column_changes: list[ColumnChange] = Field(default_factory=list)
     samples: list[RowSample] = Field(default_factory=list)
+    diagnoses: list[Diagnosis] = Field(default_factory=list)
     truncated: bool = Field(
         default=False,
         description="True when not every differing segment was inspected row by row.",

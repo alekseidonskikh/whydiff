@@ -10,7 +10,7 @@
 > progress; issues and ideas are welcome.
 
 Most diff tools tell you *whether* two tables match. whydiff tells you *what*
-changed, and (soon) *why*:
+changed and *why*:
 
 ```
 $ whydiff diff postgresql://localhost/shop orders postgresql://localhost/shop orders_v2 --key id
@@ -26,16 +26,26 @@ changed  101
          created_at: 100 rows
          amount: 1 rows
 
+diagnosis
+  created_at: shifted by exactly +03:00:00 -> likely a time zone mismatch  (100 of 100 changed)
+  rows with a changed created_at all have id in 5000 .. 5099 (a contiguous range with no unchanged rows)  (100 of 100 changed)
+
 examples
   - id='17'
   + id='300001'
   ~ id='42'  amount: '2.94' -> '2.95'
   ~ id='5000'  created_at: '2024-01-04T11:20:00.000000' -> '2024-01-04T14:20:00.000000'
 
-DIFFERENT in 2.65s
+DIFFERENT in 3.40s
 ```
 
-Coming in 0.3: `diagnosis  created_at shifted by exactly +03:00:00 → likely a timezone mismatch`.
+whydiff looks for the usual suspects in the rows that differ: a constant time
+shift (a time zone when it is whole hours), lost timestamp precision, rounding,
+a unit change (×100), a constant offset, float noise, trimmed, case-changed or
+truncated text, `''` vs `NULL`, values set to or filled from `NULL`, inverted
+booleans, swapped columns — and whether the affected rows sit in one key range,
+one time window or one value of a column. A finding is shown only when it
+explains at least 95% of the affected rows, never from a single row.
 
 ## Try it
 
@@ -77,6 +87,8 @@ print(render_text(result))
    costs one more scan, so it runs only when it saves downloading over 10,000
    rows. On the demo above it cuts the download from 252,547 rows to 12,913.
 5. Only rows from the differing segments are downloaded and compared.
+6. The differing rows are checked for patterns (see above); unchanged rows from
+   the same segments, a random sample, serve as the baseline.
 
 The SQL each database runs is tested against a pure-Python reference
 implementation, so the same data hashes identically everywhere.
@@ -104,7 +116,7 @@ implementation, so the same data hashes identically everywhere.
 |---------|-------|
 | 0.1 | Core engine: Postgres/Greenplum, DuckDB, schema diff, row diff, CLI |
 | 0.2 | ClickHouse, Snowflake, SCD2, tolerances, HTML/Markdown reports |
-| 0.3 | Root-cause diagnosis, `watch` mode for CDC, tables without a key |
+| 0.3 | More diagnoses, `watch` mode for CDC, tables without a key |
 | 1.0 | Stable Python API, docs site, connector plugins |
 
 ## License

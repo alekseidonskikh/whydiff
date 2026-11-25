@@ -61,6 +61,18 @@ def render_text(result: DiffResult) -> str:
         if n:
             add(f"warning  {n:,} duplicate keys in {label}; results for them are approximate")
 
+    if result.diagnoses:
+        add("")
+        add("diagnosis")
+        for d in result.diagnoses:
+            share = (
+                f"{d.rows:,} of {d.of_rows:,} {d.scope}" if d.of_rows else f"{d.rows:,} {d.scope}"
+            )
+            # value patterns are about one column; other findings name theirs in the message
+            per_column = d.column and d.kind not in ("range", "concentrated", "swapped")
+            prefix = f"{d.column}: " if per_column else ""
+            add(f"  {prefix}{d.message}  ({share})")
+
     if result.samples:
         add("")
         add("examples")

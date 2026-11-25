@@ -38,3 +38,15 @@ MAX_ROWS = 1_000_000
 
 #: Examples kept per kind of difference (removed, added, changed).
 SAMPLE_LIMIT = 10
+
+# -- diagnosis ------------------------------------------------------------------
+
+#: A pattern is reported only when it explains at least this share of the rows.
+DIAGNOSIS_MIN_SHARE = 0.95
+
+#: ... and at least this many rows: one row is a coincidence, not a pattern.
+DIAGNOSIS_MIN_ROWS = 2
+
+#: Concentration (a key range, one value of a column) needs at least this many
+#: affected rows and as many unchanged rows to compare against.
+CONCENTRATION_MIN_ROWS = 5
