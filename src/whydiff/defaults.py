@@ -44,7 +44,7 @@ SAMPLE_LIMIT = 10
 #: A pattern is reported only when it explains at least this share of the rows.
 DIAGNOSIS_MIN_SHARE = 0.95
 
-#: ... and at least this many rows: one row is a coincidence, not a pattern.
+#: ... and at least this many rows. One row is a coincidence, not a pattern.
 DIAGNOSIS_MIN_ROWS = 2
 
 #: Concentration (a key range, one value of a column) needs at least this many

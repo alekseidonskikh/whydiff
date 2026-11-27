@@ -9,6 +9,10 @@ def _fmt(value: str | None) -> str:
     return "NULL" if value is None else repr(value)
 
 
+def _rows(n: int) -> str:
+    return f"{n:,} row" if n == 1 else f"{n:,} rows"
+
+
 def _key(sample: RowSample) -> str:
     return ", ".join(f"{k}={_fmt(v)}" for k, v in sample.key.items())
 
@@ -43,7 +47,7 @@ def render_text(result: DiffResult) -> str:
         levels = "level" if b.bisection_levels == 1 else "levels"
         add(f"bisect   {b.bisection_levels} {levels} -> {b.segments:,} differing segments")
     if b.differing:
-        add(f"fetched  {b.rows_downloaded:,} rows")
+        add(f"fetched  {_rows(b.rows_downloaded)}")
     if result.truncated:
         add(f"         row budget reached: inspected {b.inspected:,} of {b.segments:,} segments")
 
@@ -53,7 +57,7 @@ def render_text(result: DiffResult) -> str:
         add(f"added    {result.added:,}   (in target only)")
         add(f"changed  {result.changed:,}")
         for cc in result.column_changes:
-            add(f"         {cc.column}: {cc.rows_changed:,} rows")
+            add(f"         {cc.column}: {_rows(cc.rows_changed)}")
     for label, n in (
         ("source", result.duplicate_keys_source),
         ("target", result.duplicate_keys_target),

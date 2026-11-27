@@ -62,9 +62,9 @@ def _parser() -> argparse.ArgumentParser:
     d.add_argument(
         "-w",
         "--where",
-        help="filter applied to both tables; raw SQL inserted as written, pass trusted text only",
+        help="SQL filter for both tables, inserted as is, so only pass text you trust",
     )
-    d.add_argument("--target-where", help="separate filter for the target table (raw SQL)")
+    d.add_argument("--target-where", help="separate SQL filter for the target table")
     d.add_argument(
         "--timestamp-precision",
         type=int,

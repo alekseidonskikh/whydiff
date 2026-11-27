@@ -81,11 +81,11 @@ def _harmonize(src: Column, tgt: Column) -> tuple[Column, Column, bool]:
 
 
 def _diagnosis_family(pair: _Pair) -> TypeFamily:
-    """The family diagnosis reads both sides as; OTHER when they are not comparable."""
+    """Family to diagnose a column pair as, or OTHER if the sides can't be compared."""
     src, tgt = pair.source.family, pair.target.family
     if src is tgt:
         return src
-    if src in _TIME and tgt in _TIME:  # both normalize to the same naive UTC-like text
+    if src in _TIME and tgt in _TIME:  # both normalize to the same text, timestamptz in UTC
         return TypeFamily.TIMESTAMP
     return TypeFamily.OTHER
 

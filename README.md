@@ -1,16 +1,16 @@
 # whydiff
 
-**Diff tables across databases — and find out *why* they differ.**
+Diff two tables, even in different databases, and get a guess at why they differ.
 
 > [!WARNING]
-> **Work in progress — not ready for use yet.** The core diff already runs on
-> Postgres/Greenplum and DuckDB, but there is no release: the package on PyPI is
-> only a name placeholder, and the CLI, API and output will change without notice.
-> Please don't rely on it in production. Star or watch the repository to follow
-> progress; issues and ideas are welcome.
+> Work in progress, not usable yet. The diff itself works on Postgres/Greenplum
+> and DuckDB, but nothing is released: the package on PyPI only holds the name,
+> and the CLI, the API and the output will change. Please don't use it in
+> production. Issues and ideas are welcome.
 
-Most diff tools tell you *whether* two tables match. whydiff tells you *what*
-changed and *why*:
+Most diff tools stop at "these tables don't match". whydiff also shows which
+rows and columns changed and tries to explain the change. Here it compares an
+orders table with a copy that went through a buggy pipeline:
 
 ```
 $ whydiff diff postgresql://localhost/shop orders postgresql://localhost/shop orders_v2 --key id
@@ -24,7 +24,7 @@ removed  2   (in source only)
 added    1   (in target only)
 changed  101
          created_at: 100 rows
-         amount: 1 rows
+         amount: 1 row
 
 diagnosis
   created_at: shifted by exactly +03:00:00 -> likely a time zone mismatch  (100 of 100 changed)
@@ -39,17 +39,19 @@ examples
 DIFFERENT in 3.40s
 ```
 
-whydiff looks for the usual suspects in the rows that differ: a constant time
-shift (a time zone when it is whole hours), lost timestamp precision, rounding,
-a unit change (×100), a constant offset, float noise, trimmed, case-changed or
-truncated text, `''` vs `NULL`, values set to or filled from `NULL`, inverted
-booleans, swapped columns — and whether the affected rows sit in one key range,
-one time window or one value of a column. A finding is shown only when it
-explains at least 95% of the affected rows, never from a single row.
+The diagnosis is the main point of the project. For each changed column
+whydiff looks at the pairs of old and new values and checks for common causes:
+a constant time shift (a time zone if it is a whole number of hours), lost
+timestamp precision, rounding, a unit change like x100, a constant offset,
+float noise, trimmed, case-changed or truncated text, `''` vs `NULL`, values
+set to `NULL` or filled in, flipped booleans, swapped columns. It also checks
+whether the affected rows sit in one key range or time window, or share one
+value of some column. A finding is shown only if it covers at least 95% of the
+affected rows, and never for a single row.
 
 ## Try it
 
-Until the first release, install from source:
+There is no release yet, so install from git:
 
 ```bash
 pip install "whydiff[postgres,duckdb] @ git+https://github.com/alekseidonskikh/whydiff"
@@ -60,9 +62,9 @@ whydiff diff SRC TABLE TGT TABLE -k id --timestamp-precision 3 --trim --json
 whydiff diff SRC TABLE TGT TABLE -k id -v     # progress on stderr; -vv also logs every SQL query
 ```
 
-Exit codes: `0` identical, `1` different, `2` error — ready for CI. The report
-goes to stdout, logs and errors to stderr, and passwords in connection strings
-are hidden in both.
+The exit code is 0 if the tables are identical, 1 if they differ and 2 on an
+error, so it works as a CI check. The report goes to stdout, logs and errors to
+stderr. Passwords in connection strings are masked in both.
 
 From Python:
 
@@ -75,42 +77,37 @@ print(render_text(result))
 
 ## How it works
 
-1. Columns are matched by name; types from different databases are harmonized
-   (an `integer` and a `numeric(12,2)` are both compared as decimals).
-2. Every value is normalized to a canonical string (configurable: timestamp
-   precision, decimal scale, float digits, trimming, case), each row is hashed
-   to a 60-bit integer, and rows are spread over buckets by the hash of their key.
-3. Each database returns only `count(*)` and `sum(row_hash)` per bucket. The
-   sum does not depend on row order, so no sorting is needed.
-4. Differing buckets that are still large are split into 32 sub-buckets and
-   compared again (bisection), until segments hold about 64 rows. Each level
-   costs one more scan, so it runs only when it saves downloading over 10,000
-   rows. On the demo above it cuts the download from 252,547 rows to 12,913.
-5. Only rows from the differing segments are downloaded and compared.
-6. The differing rows are checked for patterns (see above); unchanged rows from
-   the same segments, a random sample, serve as the baseline.
+1. Columns are matched by name, ignoring case. Types are harmonized across
+   databases, so an `integer` on one side and a `numeric(12,2)` on the other
+   are both compared as decimals.
+2. Every value is turned into a canonical string. Timestamp precision, decimal
+   scale, float digits, trimming and case can be configured. Each row is
+   hashed into a 60-bit integer, and rows go into buckets by the hash of their
+   key.
+3. Each database returns only `count(*)` and `sum(row_hash)` per bucket. A sum
+   doesn't depend on row order, so nothing has to be sorted.
+4. A differing bucket that is still large is split into 32 parts and compared
+   again, until segments are down to about 64 rows. Every level is one more
+   scan of the table, so it only runs when it saves downloading more than
+   10,000 rows. On the demo above this brings the download from 252,547 rows
+   to 12,913.
+5. Rows are downloaded only from the differing segments and compared by key.
+6. The diagnosis runs on those rows. The unchanged rows from the same segments
+   are a random sample of the table and serve as the baseline.
 
-The SQL each database runs is tested against a pure-Python reference
-implementation, so the same data hashes identically everywhere.
+The SQL for each database is tested against a reference implementation in
+plain Python, so the same data gets the same hash everywhere.
 
-## Planned features
+## Plans
 
-- **Any database pair** — Postgres, Greenplum, DuckDB, Parquet/CSV first;
-  ClickHouse and Snowflake next; MySQL, Oracle, MSSQL later. SQL is generated
-  once with [sqlglot](https://github.com/tobymao/sqlglot) and transpiled to
-  each dialect.
-- **Fast on large tables** — order-independent checksums per segment, so only
-  the segments that differ are downloaded and compared (in DuckDB, via Arrow).
-- **Explicit type normalization** — timestamp precision and time zones,
-  decimal scale, float tolerance, `''` vs `NULL`, trailing spaces. Every rule
-  is configurable and shown in the report.
-- **Root-cause diagnosis** — time zone shifts, rounding, trimming, truncation,
-  and differences concentrated in one slice of the data.
-- **Real-world modes** — incremental windows, SCD2 tables, tables without a
-  primary key, CDC/replication checks.
-- **CI-friendly** — JSON output, exit codes, GitHub Action.
-
-## Status and roadmap
+- More sources: Parquet and CSV through DuckDB, then ClickHouse and Snowflake,
+  later MySQL, Oracle and MSSQL.
+- A same-database mode that runs a `FULL OUTER JOIN` in the database instead
+  of downloading rows.
+- Tolerances for floats and decimals.
+- Incremental windows, SCD2 tables, tables without a primary key, replication
+  and CDC checks.
+- More diagnoses, Markdown and HTML reports, a GitHub Action.
 
 | Version | Focus |
 |---------|-------|
@@ -119,13 +116,9 @@ implementation, so the same data hashes identically everywhere.
 | 0.3 | More diagnoses, `watch` mode for CDC, tables without a key |
 | 1.0 | Stable Python API, docs site, connector plugins |
 
-## License
-
-MIT
-
 ## Development
 
-Python runs on your machine through [uv](https://docs.astral.sh/uv/); the
+Python runs on your machine through [uv](https://docs.astral.sh/uv/), the
 databases run in Docker.
 
 ```bash
@@ -140,3 +133,7 @@ make         # list all targets
 Without make: `uv sync --group dev`, `docker compose up -d --wait`, then
 `uv run pytest` with `WHYDIFF_TEST_PG_URI` set as in `.env.example`.
 `make reset` wipes the database volume and re-runs the init scripts.
+
+## License
+
+MIT

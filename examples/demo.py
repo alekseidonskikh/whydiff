@@ -65,7 +65,7 @@ def main() -> int:
     out.write_text(result.model_dump_json(indent=2), encoding="utf-8")
     logging.getLogger("demo").info("full result written to %s", out.resolve())
 
-    # Everything in the report is also available as data:
+    # every number in the report is also a field of the result
     changed_columns = ", ".join(c.column for c in result.column_changes) or "none"
     print(f"\nchanged columns: {changed_columns}")
     return 0 if result.status is Status.IDENTICAL else 1
