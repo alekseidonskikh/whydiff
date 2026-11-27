@@ -1,26 +1,25 @@
-"""Explain *why* two tables differ.
+"""Guess why two tables differ.
 
-The engine downloads whole differing segments, so besides the changed,
-removed and added rows it also has unchanged rows from the same segments: a
-random sample (segments are chosen by key hash) to compare against.
+The engine downloads whole differing segments, so along with the changed,
+removed and added rows it also gets the unchanged rows of those segments.
+Segments are picked by key hash, which makes these rows a random sample of the
+table, good enough as a baseline.
 
-Two kinds of findings:
-
-* **Value patterns**, per changed column, from the (source, target) pairs:
-  a constant time shift (a time zone when it is whole hours), lost timestamp
-  precision, rounding, a scale factor (cents vs units), a constant offset,
-  trimmed or case-changed or truncated text, ``''`` vs NULL, values set to or
-  filled from NULL, inverted booleans, swapped columns.
-* **Concentration**: the affected rows sit in a contiguous key range, a
-  narrow time window, or share one value of a column that is spread out in
-  the unchanged rows.
+There are two kinds of findings. Value patterns look at the (source, target)
+pairs of one changed column: a constant time shift (a time zone if it is whole
+hours), lost timestamp precision, rounding, a scale factor such as cents vs
+units, a constant offset, trimmed, case-changed or truncated text, ``''`` vs
+NULL, values set to or filled from NULL, inverted booleans, swapped columns.
+Concentration checks whether the affected rows sit in one key range or a narrow
+time window, or share a value of a column that is spread out in the unchanged
+rows.
 
 A finding is reported only when it explains nearly all affected rows (see
-:mod:`whydiff.defaults`), so a coincidence in one row is never a diagnosis.
+:mod:`whydiff.defaults`), so one odd row never turns into a diagnosis.
 
-Diagnosis is best effort: a check that cannot read a value (``Infinity``, a
-year past 9999, anything unexpected) is skipped and logged at DEBUG, and never
-fails the diff.
+All of this is best effort. If a check can't read a value (``Infinity``, a year
+after 9999, anything else unexpected), it is skipped with a DEBUG log line and
+the diff goes on.
 """
 
 from __future__ import annotations
@@ -234,7 +233,7 @@ def _time_shift(pairs: list[Pair]) -> tuple[int, str, str] | None:
 
 
 def _time_precision(pairs: list[Pair]) -> tuple[int, str, str] | None:
-    # the most digits that still explain the most rows: the precision target kept
+    # the largest number of digits that explains the most rows is what the target kept
     best: tuple[int, str, str] | None = None
     for digits in range(0, 6):
         width = 19 if digits == 0 else 20 + digits
@@ -454,7 +453,7 @@ def _swapped(
 
 
 def _number(value: str | None, family: TypeFamily) -> float | None:
-    """A position on a line for ordered values; None for NULL or what cannot be read."""
+    """An ordered value as a float, or None for NULL and values that can't be parsed."""
     if value is None:
         return None
     with suppress(ValueError, OverflowError):
