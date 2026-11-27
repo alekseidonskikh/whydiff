@@ -21,7 +21,13 @@ class PostgresConnector:
         # Connection.read_only only affects transactions psycopg opens itself,
         # and in autocommit mode it opens none, so it would be silently ignored.
         # The session default applies to every statement, autocommit or not.
-        self._conn.execute(b"set default_transaction_read_only = on")
+        # It guards against mistakes, not against a crafted ``where``: raw SQL
+        # can change the setting back. For untrusted input, use a read-only role.
+        try:
+            self._conn.execute(b"set default_transaction_read_only = on")
+        except BaseException:
+            self._conn.close()
+            raise
 
     def execute(self, sql: str) -> Sequence[Sequence[Any]]:
         # psycopg only takes literal strings, bytes or psycopg.sql objects as queries,

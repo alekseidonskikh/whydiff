@@ -7,7 +7,7 @@ from collections.abc import Sequence
 
 import pytest
 
-from whydiff.diagnose import Affected, Row, diagnose
+from whydiff.diagnose import Affected, Row, _ts, diagnose
 from whydiff.model import TypeFamily as F
 from whydiff.report.models import Diagnosis
 
@@ -54,6 +54,22 @@ def test_lost_timestamp_precision() -> None:
     assert "--timestamp-precision 3" in found[0].message
 
 
+def test_timestamps_with_any_fraction_digits() -> None:
+    # --timestamp-precision 1..5; Python 3.10 parses only 3 or 6 digits natively
+    assert _ts("2024-03-01T10:00:00.12").microsecond == 120000
+    assert _ts("2024-03-01T10:00:00").microsecond == 0
+    found = run(F.TIMESTAMP, [(ts(h)[:22], ts(h + 3)[:22]) for h in range(5)])
+    assert kinds(found) == ["timezone"]
+
+
+def test_unreadable_values_never_fail_the_diff() -> None:
+    assert run(F.FLOAT, [("Infinity", "1.000000"), ("Infinity", "2.000000")]) == []
+    assert run(F.DECIMAL, [("NaN", "1.00"), ("2.00", "NaN"), ("Infinity", "-Infinity")]) == []
+    bad = [(f"{i}", "not a time", "s") for i in range(10)]
+    rows = Affected(changed=[], removed=bad[::2], added=[], unchanged=bad[1::2])
+    assert diagnose(NAMES, [F.INTEGER, F.TIMESTAMP, F.TEXT], 1, rows) == []
+
+
 def test_date_shift() -> None:
     found = run(F.DATE, [(f"2024-01-0{d}", f"2024-01-0{d + 1}") for d in range(1, 6)])
     assert kinds(found) == ["date_shift"] and "+1 day" in found[0].message
@@ -77,10 +93,32 @@ def test_offset_and_sign() -> None:
 def test_float_noise() -> None:
     found = run(F.FLOAT, [("0.300000", "0.300001"), ("1.000000", "1.000001")])
     assert kinds(found) == ["float_noise"]
+    assert "--float-digits 5 would make them equal" in found[0].message
+
+
+def test_noise_suggests_digits_that_really_make_values_equal() -> None:
+    # at 5 digits 1.000004 -> 1.00000 but 1.000006 -> 1.00001
+    found = run(F.FLOAT, [("1.000004", "1.000006"), ("2.000004", "2.000006")])
+    assert "--float-digits 4 " in found[0].message
+
+
+def test_noise_names_the_option_of_the_type() -> None:
+    pairs = [
+        ("1000.000001", "1000.000004"),
+        ("2000.000002", "2000.000009"),
+        ("5.000001", "5.000003"),
+    ]
+    found = run(F.DECIMAL, pairs)
+    assert kinds(found) == ["float_noise"] and "--decimal-scale 4 " in found[0].message
+    found = run(F.INTEGER, [("1000000", "1000001"), ("2000000", "2000003")])
+    assert kinds(found) == ["float_noise"] and "--" not in found[0].message
 
 
 def test_text_patterns() -> None:
-    assert kinds(run(F.TEXT, [("abc ", "abc"), (" x", "x")])) == ["whitespace"]
+    found = run(F.TEXT, [("abc ", "abc"), (" x", "x")])
+    assert kinds(found) == ["whitespace"] and found[0].message.endswith("-> --trim")
+    found = run(F.TEXT, [("abc", "abc\r"), ("x", "x\r")])  # --trim would not help
+    assert kinds(found) == ["whitespace"] and "--trim strips spaces only" in found[0].message
     assert kinds(run(F.TEXT, [("Paris", "PARIS"), ("Rome", "rome")])) == ["case"]
     found = run(F.TEXT, [("abcdefgh", "abcde"), ("1234567", "12345")])
     assert kinds(found) == ["truncation"] and "target is cut to 5" in found[0].message

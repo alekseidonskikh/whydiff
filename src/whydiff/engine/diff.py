@@ -46,6 +46,7 @@ from whydiff.report.models import (
 log = get_logger("engine")
 
 _NUMERIC_RANK = {TypeFamily.INTEGER: 0, TypeFamily.DECIMAL: 1, TypeFamily.FLOAT: 2}
+_TIME = (TypeFamily.TIMESTAMP, TypeFamily.TIMESTAMPTZ)
 
 T = TypeVar("T")
 Row = tuple[str | None, ...]
@@ -79,18 +80,38 @@ def _harmonize(src: Column, tgt: Column) -> tuple[Column, Column, bool]:
     return src, tgt, True
 
 
+def _diagnosis_family(pair: _Pair) -> TypeFamily:
+    """The family diagnosis reads both sides as; OTHER when they are not comparable."""
+    src, tgt = pair.source.family, pair.target.family
+    if src is tgt:
+        return src
+    if src in _TIME and tgt in _TIME:  # both normalize to the same naive UTC-like text
+        return TypeFamily.TIMESTAMP
+    return TypeFamily.OTHER
+
+
 def _match_columns(
     source: list[Column], target: list[Column], wanted: Sequence[str] | None, exclude: set[str]
 ) -> tuple[list[_Pair], SchemaDiff]:
+    """Pair columns present on both sides.
+
+    ``wanted`` (None = all) and ``exclude`` are lowercase names. Columns they
+    leave out are ignored entirely: they are not compared and do not count as
+    a schema difference even if only one side has them.
+    """
     target_by_name = {c.name.lower(): c for c in target}
     source_names = {c.name.lower() for c in source}
+    wanted_lower = set(wanted) if wanted is not None else None
+
+    def ignored(lname: str) -> bool:
+        return lname in exclude or (wanted_lower is not None and lname not in wanted_lower)
+
     pairs: list[_Pair] = []
     mismatches: list[TypeMismatch] = []
-    wanted_lower = {w.lower() for w in wanted} if wanted else None
     for src in source:
         lname = src.name.lower()
         tgt = target_by_name.get(lname)
-        if tgt is None or lname in exclude or (wanted_lower and lname not in wanted_lower):
+        if tgt is None or ignored(lname):
             continue
         s, t, differed = _harmonize(src, tgt)
         if differed:
@@ -107,14 +128,18 @@ def _match_columns(
                 )
             )
         pairs.append(_Pair(src.name, s, t))
-    if wanted_lower:
-        missing = wanted_lower - {p.name.lower() for p in pairs}
-        if missing:
-            raise LookupError(f"Columns not found in both tables: {sorted(missing)}")
     schema = SchemaDiff(
         compared_columns=[p.name for p in pairs],
-        only_in_source=[c.name for c in source if c.name.lower() not in target_by_name],
-        only_in_target=[c.name for c in target if c.name.lower() not in source_names],
+        only_in_source=[
+            c.name
+            for c in source
+            if c.name.lower() not in target_by_name and not ignored(c.name.lower())
+        ],
+        only_in_target=[
+            c.name
+            for c in target
+            if c.name.lower() not in source_names and not ignored(c.name.lower())
+        ],
         type_mismatches=mismatches,
     )
     return pairs, schema
@@ -258,15 +283,23 @@ def diff_tables(
     excluded = {e.lower() for e in exclude}
     if excluded & set(key_lower):
         raise ValueError("Key columns cannot be excluded")
-    all_pairs, schema = _match_columns(src_cols, tgt_cols, None, excluded)
+    known = {c.name.lower() for c in (*src_cols, *tgt_cols)}
+    unknown = sorted(excluded - known)
+    if unknown:
+        raise LookupError(f"Excluded columns not found in either table: {unknown}")
+    # key columns are always compared, so naming them in ``columns`` is harmless
+    wanted = [*key_lower, *(c.lower() for c in columns)] if columns else None
+    all_pairs, schema = _match_columns(src_cols, tgt_cols, wanted, excluded)
     by_name = {p.name.lower(): p for p in all_pairs}
     missing_keys = [k for k in key if k.lower() not in by_name]
     if missing_keys:
         raise LookupError(f"Key columns not found in both tables: {missing_keys}")
+    if wanted:
+        missing = sorted(set(wanted) - by_name.keys())
+        if missing:
+            raise LookupError(f"Columns not found in both tables: {missing}")
     keys = [by_name[k] for k in key_lower]
-    values, _ = _match_columns(src_cols, tgt_cols, columns, excluded | set(key_lower))
-    if columns:
-        schema.compared_columns = [p.name for p in values]
+    values = [p for p in all_pairs if p.name.lower() not in key_lower]
     compared = [*keys, *values]
     log.info(
         "schema: %d columns compared, %d only in source, %d only in target, %d type mismatches",
@@ -413,10 +446,7 @@ def diff_tables(
     )
     names = [p.name for p in compared]
     affected = _compare_rows(result, rows_src, rows_tgt, len(keys), names, sample_limit)
-    families = [
-        p.source.family if p.source.family is p.target.family else TypeFamily.OTHER
-        for p in compared
-    ]
+    families = [_diagnosis_family(p) for p in compared]
     result.diagnoses = diagnose(names, families, len(keys), affected)
     if first or n_src != n_tgt or schema.differs:
         result.status = Status.DIFFERENT

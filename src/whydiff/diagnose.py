@@ -17,20 +17,29 @@ Two kinds of findings:
 
 A finding is reported only when it explains nearly all affected rows (see
 :mod:`whydiff.defaults`), so a coincidence in one row is never a diagnosis.
+
+Diagnosis is best effort: a check that cannot read a value (``Infinity``, a
+year past 9999, anything unexpected) is skipped and logged at DEBUG, and never
+fails the diff.
 """
 
 from __future__ import annotations
 
 import datetime as dt
+import math
 from collections import Counter
 from collections.abc import Callable, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 from decimal import ROUND_DOWN, ROUND_HALF_UP, Decimal, InvalidOperation
+from functools import partial
 
 from whydiff import defaults
+from whydiff.log import get_logger
 from whydiff.model import TypeFamily
 from whydiff.report.models import Diagnosis
+
+log = get_logger("diagnose")
 
 Row = tuple[str | None, ...]
 Pair = tuple[str | None, str | None]
@@ -76,7 +85,10 @@ def diagnose(
             if d is not None:
                 found.append(d.model_copy(update={"column": names[i], "of_rows": len(pairs)}))
                 break
-    found += _swapped(names, families, rows.changed, changed_by_col, min_share, min_rows)
+    found += _safe(
+        "swapped columns",
+        lambda: _swapped(names, families, rows.changed, changed_by_col, min_share, min_rows),
+    )
 
     # concentration: per changed column (one cause per column is the common case),
     # then for removed and added rows
@@ -88,8 +100,21 @@ def diagnose(
     groups += [("added", "added rows", list(rows.added))]
     for scope, noun, affected in groups:
         if len(affected) >= max(min_rows, defaults.CONCENTRATION_MIN_ROWS):
-            found += _concentration(scope, noun, names, families, n_keys, affected, rows.unchanged)
+            found += _safe(
+                f"concentration of {noun}",
+                partial(
+                    _concentration, scope, noun, names, families, n_keys, affected, rows.unchanged
+                ),
+            )
     return found
+
+
+def _safe(what: str, find: Callable[[], list[Diagnosis]]) -> list[Diagnosis]:
+    try:
+        return find()
+    except Exception:
+        log.debug("diagnosis skipped: %s", what, exc_info=True)
+        return []
 
 
 # -- value patterns ---------------------------------------------------------------
@@ -99,7 +124,11 @@ Check = Callable[[list[Pair]], tuple[int, str, str] | None]
 
 
 def _try(check: Check, pairs: list[Pair], min_share: float) -> Diagnosis | None:
-    outcome = check(pairs)
+    try:
+        outcome = check(pairs)
+    except Exception:
+        log.debug("diagnosis skipped: %s", getattr(check, "__name__", check), exc_info=True)
+        return None
     if outcome is None:
         return None
     explained, kind, message = outcome
@@ -117,9 +146,11 @@ def _checks_for(family: TypeFamily) -> list[Check]:
     if family is TypeFamily.DATE:
         return [*common, _date_shift]
     if family is TypeFamily.FLOAT:  # tiny differences are the usual story for floats
-        return [*common, _float_noise, _rounding, _scale, _sign, _offset]
-    if family in _NUMERIC:
-        return [*common, _rounding, _scale, _sign, _offset, _float_noise]
+        return [*common, _noise("--float-digits"), _rounding, _scale, _sign, _offset]
+    if family is TypeFamily.DECIMAL:
+        return [*common, _rounding, _scale, _sign, _offset, _noise("--decimal-scale")]
+    if family is TypeFamily.INTEGER:
+        return [*common, _rounding, _scale, _sign, _offset, _noise(None)]
     if family is TypeFamily.TEXT:
         return [*common, _whitespace, _case, _truncation]
     if family is TypeFamily.BOOLEAN:
@@ -162,6 +193,11 @@ def _most_common(values: list[object]) -> tuple[object, int] | None:
 
 
 def _ts(value: str) -> dt.datetime:
+    # normalized timestamps keep 0..6 fractional digits; before 3.11,
+    # fromisoformat accepts only 3 or 6 of them
+    head, dot, fraction = value.partition(".")
+    if dot:
+        value = f"{head}.{fraction.ljust(6, '0')}"
     return dt.datetime.fromisoformat(value)
 
 
@@ -234,11 +270,11 @@ def _date_shift(pairs: list[Pair]) -> tuple[int, str, str] | None:
 
 
 def _rounding(pairs: list[Pair]) -> tuple[int, str, str] | None:
-    def places(x: str) -> int:
-        exponent = Decimal(x).normalize().as_tuple().exponent
-        return max(0, -exponent) if isinstance(exponent, int) else 0
-
-    most = max((places(x) for x, _ in pairs if x is not None), default=0)
+    most = 0
+    for x, _ in pairs:
+        if x is not None:
+            with suppress(ArithmeticError, ValueError):
+                most = max(most, _places(x))
     best: tuple[int, str, str] | None = None
     for digits in range(0, most):
         q = Decimal(1).scaleb(-digits)
@@ -253,12 +289,21 @@ def _rounding(pairs: list[Pair]) -> tuple[int, str, str] | None:
     return best
 
 
-def _scale(pairs: list[Pair]) -> tuple[int, str, str] | None:
-    ratios: list[object] = []
+def _finite(pairs: list[Pair]) -> list[tuple[Decimal, Decimal]]:
+    """Pairs where both sides are ordinary numbers: no NULL, NaN or Infinity."""
+    result = []
     for x, y in pairs:
-        if x is None or y is None or Decimal(x) == 0:
+        if x is None or y is None:
             continue
-        ratios.append((Decimal(y) / Decimal(x)).normalize())
+        with suppress(ArithmeticError, ValueError):
+            dx, dy = Decimal(x), Decimal(y)
+            if dx.is_finite() and dy.is_finite():
+                result.append((dx, dy))
+    return result
+
+
+def _scale(pairs: list[Pair]) -> tuple[int, str, str] | None:
+    ratios: list[object] = [(y / x).normalize() for x, y in _finite(pairs) if x != 0]
     top = _most_common(ratios)
     if top is None:
         return None
@@ -278,10 +323,7 @@ def _sign(pairs: list[Pair]) -> tuple[int, str, str] | None:
 
 
 def _offset(pairs: list[Pair]) -> tuple[int, str, str] | None:
-    deltas: list[object] = []
-    for x, y in pairs:
-        if x is not None and y is not None:
-            deltas.append((Decimal(y) - Decimal(x)).normalize())
+    deltas: list[object] = [(y - x).normalize() for x, y in _finite(pairs)]
     top = _most_common(deltas)
     if top is None:
         return None
@@ -290,26 +332,48 @@ def _offset(pairs: list[Pair]) -> tuple[int, str, str] | None:
     return n, "offset", f"target = source {'+' if delta > 0 else '-'} {abs(delta):f}"
 
 
-def _float_noise(pairs: list[Pair]) -> tuple[int, str, str] | None:
-    worst = Decimal(0)
-    n = 0
-    for x, y in pairs:
-        if x is None or y is None:
-            continue
-        diff = abs(Decimal(y) - Decimal(x))
-        scale = max(abs(Decimal(x)), Decimal(1))
-        if diff / scale <= Decimal("1e-4"):
-            n += 1
-            worst = max(worst, diff)
-    if not n:
-        return None
-    exponent = worst.adjusted() if worst else 0
-    digits = max(0, -exponent - 1)
-    return (
-        n,
-        "float_noise",
-        f"tiny differences (at most {worst:f}) -> --float-digits {digits} would make them equal",
-    )
+def _places(x: str) -> int:
+    exponent = Decimal(x).normalize().as_tuple().exponent
+    return max(0, -exponent) if isinstance(exponent, int) else 0
+
+
+def _equalizing_digits(pairs: list[tuple[str, str]]) -> int | None:
+    """The most digits after the point at which every pair rounds to the same value."""
+    most = max(max(_places(x), _places(y)) for x, y in pairs)
+    for digits in range(most - 1, -1, -1):
+        q = Decimal(1).scaleb(-digits)
+        if all(
+            Decimal(x).quantize(q, rounding=ROUND_HALF_UP)
+            == Decimal(y).quantize(q, rounding=ROUND_HALF_UP)
+            for x, y in pairs
+        ):
+            return digits
+    return None
+
+
+def _noise(flag: str | None) -> Check:
+    """Tiny relative differences; ``flag`` is the option that rounds them away."""
+
+    def noise(pairs: list[Pair]) -> tuple[int, str, str] | None:
+        close: list[tuple[str, str]] = []
+        worst = Decimal(0)
+        for x, y in pairs:
+            if x is None or y is None:
+                continue
+            with suppress(ArithmeticError, ValueError):
+                diff = abs(Decimal(y) - Decimal(x))
+                if diff / max(abs(Decimal(x)), Decimal(1)) <= Decimal("1e-4"):
+                    close.append((x, y))
+                    worst = max(worst, diff)
+        if not close:
+            return None
+        text = f"tiny differences (at most {worst:f})"
+        digits = _equalizing_digits(close) if flag else None
+        if digits is not None:
+            text += f" -> {flag} {digits} would make them equal"
+        return len(close), "float_noise", text
+
+    return noise
 
 
 # text and booleans
@@ -317,7 +381,16 @@ def _float_noise(pairs: list[Pair]) -> tuple[int, str, str] | None:
 
 def _whitespace(pairs: list[Pair]) -> tuple[int, str, str] | None:
     n = _count(pairs, lambda x, y: x.strip() == y.strip())
-    return (n, "whitespace", "differs only in surrounding spaces -> --trim") if n else None
+    if not n:
+        return None
+    # --trim strips spaces only, like btrim() and trim() in the databases
+    if _count(pairs, lambda x, y: x.strip(" ") == y.strip(" ")) == n:
+        return n, "whitespace", "differs only in surrounding spaces -> --trim"
+    return (
+        n,
+        "whitespace",
+        "differs only in surrounding whitespace (tabs, line breaks); --trim strips spaces only",
+    )
 
 
 def _case(pairs: list[Pair]) -> tuple[int, str, str] | None:
@@ -381,14 +454,17 @@ def _swapped(
 
 
 def _number(value: str | None, family: TypeFamily) -> float | None:
+    """A position on a line for ordered values; None for NULL or what cannot be read."""
     if value is None:
         return None
-    if family in _NUMERIC:
-        return float(value)
-    if family in _TIME:  # normalized timestamps are UTC or naive; either way, compare as UTC
-        return _ts(value).replace(tzinfo=dt.timezone.utc).timestamp()
-    if family is TypeFamily.DATE:
-        return float(dt.date.fromisoformat(value).toordinal())
+    with suppress(ValueError, OverflowError):
+        if family in _NUMERIC:
+            number = float(value)
+            return number if math.isfinite(number) else None
+        if family in _TIME:  # normalized timestamps are UTC or naive; either way, compare as UTC
+            return _ts(value).replace(tzinfo=dt.timezone.utc).timestamp()
+        if family is TypeFamily.DATE:
+            return float(dt.date.fromisoformat(value).toordinal())
     return None
 
 

@@ -44,8 +44,16 @@ def shorten_sql(sql: str, limit: int = SQL_LOG_LIMIT) -> str:
 
 
 def configure_logging(verbosity: int = 0, *, stream: TextIO | None = None) -> None:
-    """Send whydiff logs to stderr: 0 = warnings only, 1 = INFO, 2+ = DEBUG."""
-    level = logging.WARNING if verbosity <= 0 else logging.INFO if verbosity == 1 else logging.DEBUG
+    """Send whydiff logs to stderr: -1 = errors only, 0 = warnings, 1 = INFO, 2+ = DEBUG."""
+    level = (
+        logging.ERROR
+        if verbosity < 0
+        else logging.WARNING
+        if verbosity == 0
+        else logging.INFO
+        if verbosity == 1
+        else logging.DEBUG
+    )
     handler = logging.StreamHandler(stream or sys.stderr)
     handler.setFormatter(
         logging.Formatter("%(asctime)s.%(msecs)03d %(levelname)-5s %(message)s", "%H:%M:%S")
