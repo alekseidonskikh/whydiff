@@ -42,16 +42,16 @@ class PostgresConnector:
     ) -> None:
         try:
             import psycopg
-            from psycopg.conninfo import conninfo_to_dict
+            from psycopg.conninfo import conninfo_to_dict, make_conninfo
         except ImportError as exc:  # pragma: no cover - depends on environment
             raise ImportError(
                 "Postgres support needs psycopg: pip install 'whydiff[postgres]'"
             ) from exc
         self.dialect = PostgresDialect()
         # name the session so a DBA can tell these queries apart, unless the DSN does
-        named = "application_name" in conninfo_to_dict(dsn)
-        extra = {} if named else {"application_name": APPLICATION_NAME}
-        self._conn = psycopg.connect(dsn, autocommit=not snapshot, **extra)
+        if "application_name" not in conninfo_to_dict(dsn):
+            dsn = make_conninfo(dsn, application_name=APPLICATION_NAME)
+        self._conn = psycopg.connect(dsn, autocommit=not snapshot)
         try:
             if snapshot:
                 self._conn.isolation_level = psycopg.IsolationLevel.REPEATABLE_READ
