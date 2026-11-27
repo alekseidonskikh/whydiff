@@ -29,6 +29,7 @@ from whydiff import defaults
 from whydiff.connectors.base import Connector, get_columns, run_query
 from whydiff.constants import CHECKSUM_MODULUS, HASH_SPACE, IDS_PER_QUERY, MAX_BUCKETS
 from whydiff.diagnose import Affected, diagnose
+from whydiff.dialects.base import check_filter
 from whydiff.log import get_logger
 from whydiff.model import Column, TableRef, TypeFamily
 from whydiff.normalize.rules import NormalizationRules
@@ -261,6 +262,9 @@ def diff_tables(
     src_ref = TableRef.parse(source_table) if isinstance(source_table, str) else source_table
     tgt_ref = TableRef.parse(target_table) if isinstance(target_table, str) else target_table
     tgt_where = target_where if target_where is not None else where
+    for text in (where, target_where):
+        if text:
+            check_filter(text)
     if not key:
         raise ValueError("At least one key column is required")
     if bisection_factor < 2:

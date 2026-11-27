@@ -113,6 +113,15 @@ def test_exclude_where_and_schema(backend: Any) -> None:
     assert result.status is Status.DIFFERENT  # because of the schema difference
 
 
+def test_filter_is_checked_before_any_query(backend: Any) -> None:
+    rows = random_rows(random.Random(5), 10)
+    a, b = make_table(backend, rows), make_table(backend, rows)
+    with pytest.raises(ValueError, match="one expression"):
+        diff_tables(backend, a, backend, b, ["id"], where="true; select 1")
+    with pytest.raises(ValueError, match="unbalanced"):
+        diff_tables(backend, a, backend, b, ["id"], target_where="true) or (true")
+
+
 def test_excluded_and_unselected_columns_are_not_a_schema_difference(backend: Any) -> None:
     rows = random_rows(random.Random(3), 100)
     a = make_table(backend, rows)

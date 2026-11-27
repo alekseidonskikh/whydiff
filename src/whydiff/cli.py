@@ -62,7 +62,8 @@ def _parser() -> argparse.ArgumentParser:
     d.add_argument(
         "-w",
         "--where",
-        help="SQL filter for both tables, inserted as is, so only pass text you trust",
+        help="SQL filter for both tables, one expression; it can read other tables, "
+        "so only pass text you trust",
     )
     d.add_argument("--target-where", help="separate SQL filter for the target table")
     d.add_argument(

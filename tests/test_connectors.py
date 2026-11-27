@@ -75,6 +75,19 @@ def test_session_settings_override_the_users() -> None:
 
 
 @needs_pg
+def test_backslash_cannot_end_a_string_literal() -> None:
+    assert PG_URI
+    # with standard_conforming_strings off, \\' would end the literal early
+    conn = connect(_with_options(PG_URI, "-c standard_conforming_strings=off"))
+    try:
+        assert conn.execute("show standard_conforming_strings")[0][0] == "on"
+        with pytest.raises(LookupError, match="not found"):
+            get_columns(conn, TableRef("pg_catalog", "x\\' or true --"))
+    finally:
+        conn.close()
+
+
+@needs_pg
 def test_one_snapshot_for_the_whole_diff() -> None:
     assert PG_URI
     table = unique_name("snap")

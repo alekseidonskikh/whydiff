@@ -76,7 +76,7 @@ class PostgresDialect(Dialect):
         return self.lower_template.format(expr)
 
     def _timestamp(self, expr: str, precision: int) -> str:
-        width = 19 if precision == 0 else 20 + precision
+        width = self.timestamp_width(precision)
         return f"left(to_char({expr}, 'YYYY-MM-DD\"T\"HH24:MI:SS.US'), {width})"
 
     def normalize_sql(self, expr: str, column: Column, rules: NormalizationRules) -> str:
