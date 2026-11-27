@@ -73,6 +73,15 @@ def test_configure_logging_levels() -> None:
     assert "INFO  hello" in out and "hidden" not in out
 
 
+def test_quiet_logs_errors_only() -> None:
+    stream = io.StringIO()
+    configure_logging(-1, stream=stream)
+    get_logger("x").warning("hidden")
+    get_logger("x").error("shown")
+    out = stream.getvalue()
+    assert "shown" in out and "hidden" not in out
+
+
 def test_cli_errors_hide_passwords(capsys: pytest.CaptureFixture[str]) -> None:
     code = main(["diff", "oracle://bob:s3cr3t@db/x", "t", "duckdb://", "t", "-k", "id"])
     err = capsys.readouterr().err

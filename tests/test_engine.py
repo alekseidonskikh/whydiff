@@ -10,6 +10,8 @@ import pytest
 
 from backends import unique_name
 from whydiff import NormalizationRules, Status, diff_tables, render_text
+from whydiff.engine.diff import _diagnosis_family, _match_columns, _Pair
+from whydiff.model import Column, TypeFamily
 
 Row = tuple[int, str | None, Decimal | None, dt.datetime | None, bool | None]
 DDL = "(id integer, name text, amount numeric(12,2), created_at timestamp, active boolean)"
@@ -109,6 +111,47 @@ def test_exclude_where_and_schema(backend: Any) -> None:
     assert result.schema_diff.only_in_target == ["extra"]
     assert result.changed == 0
     assert result.status is Status.DIFFERENT  # because of the schema difference
+
+
+def test_excluded_and_unselected_columns_are_not_a_schema_difference(backend: Any) -> None:
+    rows = random_rows(random.Random(3), 100)
+    a = make_table(backend, rows)
+    b = make_table(backend, [(*r, 1) for r in rows], DDL[:-1] + ", extra integer)")
+    assert diff_tables(backend, a, backend, b, ["id"]).status is Status.DIFFERENT
+    result = diff_tables(backend, a, backend, b, ["id"], exclude=["extra"])
+    assert result.status is Status.IDENTICAL and result.schema_diff.only_in_target == []
+    # the key may be named in columns too
+    result = diff_tables(backend, a, backend, b, ["id"], columns=["id", "amount"])
+    assert result.status is Status.IDENTICAL
+    assert result.schema_diff.compared_columns == ["id", "amount"]
+    with pytest.raises(LookupError, match="Excluded columns not found"):
+        diff_tables(backend, a, backend, b, ["id"], exclude=["extar"])
+
+
+def _col(name: str, family: TypeFamily) -> Column:
+    return Column(name, family.value, family)
+
+
+def test_match_columns_ignores_left_out_columns() -> None:
+    src = [_col("id", TypeFamily.INTEGER), _col("v", TypeFamily.TEXT), _col("old", TypeFamily.TEXT)]
+    tgt = [
+        _col("ID", TypeFamily.INTEGER),
+        _col("v", TypeFamily.INTEGER),
+        _col("etl", TypeFamily.DATE),
+    ]
+    pairs, schema = _match_columns(src, tgt, None, {"etl"})
+    assert [p.name for p in pairs] == ["id", "v"]
+    assert schema.only_in_source == ["old"] and schema.only_in_target == []
+    pairs, schema = _match_columns(src, tgt, ["id"], set())
+    assert [p.name for p in pairs] == ["id"]
+    assert not schema.differs and schema.type_mismatches == []
+
+
+def test_timestamp_and_timestamptz_are_diagnosed_as_time() -> None:
+    naive, aware = _col("t", TypeFamily.TIMESTAMP), _col("t", TypeFamily.TIMESTAMPTZ)
+    assert _diagnosis_family(_Pair("t", naive, aware)) is TypeFamily.TIMESTAMP
+    text = _col("t", TypeFamily.TEXT)
+    assert _diagnosis_family(_Pair("t", naive, text)) is TypeFamily.OTHER
 
 
 def test_composite_key_and_type_harmonization(backend: Any) -> None:
