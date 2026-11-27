@@ -11,8 +11,8 @@ from __future__ import annotations
 #: Fractional second digits kept in timestamps (6 = microseconds).
 TIMESTAMP_PRECISION = 6
 
-#: Digits after the point for floats.
-FLOAT_DIGITS = 6
+#: Significant digits floats are rounded to. None compares them exactly.
+FLOAT_DIGITS: int | None = None
 
 # -- segmentation ---------------------------------------------------------------
 

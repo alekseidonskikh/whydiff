@@ -36,6 +36,7 @@ from functools import partial
 from whydiff import defaults
 from whydiff.log import get_logger
 from whydiff.model import TypeFamily
+from whydiff.normalize.reference import round_sig, sci_digits
 from whydiff.report.models import Diagnosis
 
 log = get_logger("diagnose")
@@ -192,11 +193,7 @@ def _most_common(values: list[object]) -> tuple[object, int] | None:
 
 
 def _ts(value: str) -> dt.datetime:
-    # normalized timestamps keep 0..6 fractional digits; before 3.11,
-    # fromisoformat accepts only 3 or 6 of them
-    head, dot, fraction = value.partition(".")
-    if dot:
-        value = f"{head}.{fraction.ljust(6, '0')}"
+    # normalized timestamps keep 0..6 fractional digits; fromisoformat takes any
     return dt.datetime.fromisoformat(value)
 
 
@@ -350,6 +347,21 @@ def _equalizing_digits(pairs: list[tuple[str, str]]) -> int | None:
     return None
 
 
+def _significant(value: str, digits: int) -> tuple[bool, str, int]:
+    """A float's canonical text rounded to ``digits`` significant digits, as SQL does."""
+    negative = value.startswith("-")
+    mantissa, exponent = round_sig(*sci_digits(value.lstrip("-")), digits)
+    return negative, mantissa, exponent
+
+
+def _equalizing_significant(pairs: list[tuple[str, str]]) -> int | None:
+    """The most significant digits at which every pair rounds to the same value."""
+    for digits in range(16, 0, -1):
+        if all(_significant(x, digits) == _significant(y, digits) for x, y in pairs):
+            return digits
+    return None
+
+
 def _noise(flag: str | None) -> Check:
     """Tiny relative differences; ``flag`` is the option that rounds them away."""
 
@@ -367,7 +379,10 @@ def _noise(flag: str | None) -> Check:
         if not close:
             return None
         text = f"tiny differences (at most {worst:f})"
-        digits = _equalizing_digits(close) if flag else None
+        if flag == "--float-digits":
+            digits = _equalizing_significant(close)
+        else:
+            digits = _equalizing_digits(close) if flag else None
         if digits is not None:
             text += f" -> {flag} {digits} would make them equal"
         return len(close), "float_noise", text
@@ -461,7 +476,7 @@ def _number(value: str | None, family: TypeFamily) -> float | None:
             number = float(value)
             return number if math.isfinite(number) else None
         if family in _TIME:  # normalized timestamps are UTC or naive; either way, compare as UTC
-            return _ts(value).replace(tzinfo=dt.timezone.utc).timestamp()
+            return _ts(value).replace(tzinfo=dt.UTC).timestamp()
         if family is TypeFamily.DATE:
             return float(dt.date.fromisoformat(value).toordinal())
     return None

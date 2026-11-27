@@ -25,25 +25,131 @@ from __future__ import annotations
 
 import datetime as dt
 import hashlib
+import math
+import struct
 from collections.abc import Sequence
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
-from whydiff.constants import HASH_HEX_DIGITS, LENGTH_SEPARATOR, NULL_TOKEN
+from whydiff.constants import (
+    FLOAT32_PRECISION,
+    FLOAT64_PRECISION,
+    HASH_HEX_DIGITS,
+    LENGTH_SEPARATOR,
+    NULL_TOKEN,
+)
 from whydiff.model import Column, TypeFamily
 from whydiff.normalize.rules import NormalizationRules
 
 
-def _fixed(value: Decimal, digits: int) -> str:
+def _special(value: Decimal) -> str | None:
     if value.is_nan():
         return "NaN"
     if value.is_infinite():
         return "Infinity" if value > 0 else "-Infinity"
-    quantum = Decimal(1).scaleb(-digits)
-    result = value.quantize(quantum, rounding=ROUND_HALF_UP)
-    if result.is_zero():
-        result = abs(result)  # databases print 0.00, never -0.00
-    return f"{result:f}"
+    return None
+
+
+def canonical_decimal(value: Decimal, scale: int | None) -> str:
+    """Plain notation without trailing zeros, so 1.50 and 1.5000 are equal.
+
+    With ``scale`` the value is first rounded half-up to that many digits
+    after the point. Without it nothing is rounded.
+    """
+    special = _special(value)
+    if special is not None:
+        return special
+    if scale is not None:
+        value = value.quantize(Decimal(1).scaleb(-scale), rounding=ROUND_HALF_UP)
+    text = f"{value:f}"
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return "0" if text in ("-0", "0", "") else text
+
+
+_FLOAT32_MAX = struct.unpack("f", b"\xff\xff\x7f\x7f")[0]
+# Above FLT_MAX by half a unit in the last place a value rounds to infinity.
+_FLOAT32_OVERFLOW = _FLOAT32_MAX + 2.0**103
+
+
+def to_single(value: float) -> float:
+    """Round a double to the nearest single, as a cast to real does.
+
+    struct refuses values just above FLT_MAX that still round down to it.
+    """
+    if math.isnan(value) or math.isinf(value):
+        return value
+    if abs(value) >= _FLOAT32_OVERFLOW:
+        return math.copysign(math.inf, value)
+    if abs(value) > _FLOAT32_MAX:
+        return math.copysign(_FLOAT32_MAX, value)
+    single: float = struct.unpack("f", struct.pack("f", value))[0]
+    return single
+
+
+def shortest_float_text(value: float, precision: int) -> str:
+    """The shortest decimal that reads back as the same float.
+
+    For doubles this is ``repr``. For singles it is the shortest string that
+    reads back as the same 32-bit value, which is what databases print.
+    """
+    if precision != FLOAT32_PRECISION:
+        return repr(value)
+    single = to_single(value)
+    for digits in range(1, 10):
+        text = f"{single:.{digits}g}"
+        if to_single(float(text)) == single:
+            return text
+    return repr(single)
+
+
+def sci_digits(text: str) -> tuple[str, int]:
+    """Split a non-negative decimal text into significant digits and exponent.
+
+    ``"0.00125"`` gives ``("125", -3)``: the value is 1.25e-3. Leading and
+    trailing zeros are dropped. Zero gives ``("", 0)``.
+    """
+    mantissa, _, exp = text.lower().partition("e")
+    whole, _, frac = mantissa.partition(".")
+    raw = whole + frac
+    stripped = raw.lstrip("0")
+    exponent = int(exp or "0") + len(whole) - 1 - (len(raw) - len(stripped))
+    return stripped.rstrip("0"), exponent
+
+
+def round_sig(digits: str, exponent: int, significant: int) -> tuple[str, int]:
+    """Round a digit string half-up to ``significant`` digits."""
+    if len(digits) <= significant:
+        return digits, exponent
+    head = int(digits[:significant]) + (1 if digits[significant] >= "5" else 0)
+    text = str(head)
+    if len(text) > significant:  # 999 -> 1000 carries into the exponent
+        exponent += 1
+    return text.rstrip("0"), exponent
+
+
+def canonical_float(value: float, precision: int, significant: int | None) -> str:
+    """Scientific notation of the shortest round-trip decimal: 1.25e0, 1e-7, 1e33.
+
+    Floats are exact by default. ``significant`` rounds the shortest decimal
+    half-up to that many significant digits, which is the same in every
+    database because it works on the digits, not on the binary value.
+    """
+    if precision == FLOAT32_PRECISION:
+        value = to_single(value)
+    if math.isnan(value):
+        return "NaN"
+    if math.isinf(value):
+        return "Infinity" if value > 0 else "-Infinity"
+    if value == 0:
+        return "0"  # also -0.0
+    digits, exponent = sci_digits(shortest_float_text(abs(value), precision))
+    if significant is not None:
+        digits, exponent = round_sig(digits, exponent, significant)
+    if not digits:
+        return "0"
+    mantissa = digits[0] + ("." + digits[1:] if len(digits) > 1 else "")
+    return f"{'-' if value < 0 else ''}{mantissa}e{exponent}"
 
 
 def _timestamp(value: dt.datetime, precision: int) -> str:
@@ -59,9 +165,10 @@ def normalize_value(value: Any, column: Column, rules: NormalizationRules) -> st
     if family is TypeFamily.INTEGER:
         return str(int(value))
     if family is TypeFamily.DECIMAL:
-        return _fixed(Decimal(value), rules.decimal_digits(column.scale))
+        return canonical_decimal(Decimal(value), rules.decimal_scale)
     if family is TypeFamily.FLOAT:
-        return _fixed(Decimal(repr(float(value))), rules.float_digits)
+        precision = column.precision or FLOAT64_PRECISION
+        return canonical_float(float(value), precision, rules.float_digits)
     if family is TypeFamily.BOOLEAN:
         return "1" if value else "0"
     if family is TypeFamily.DATE:
@@ -69,7 +176,7 @@ def normalize_value(value: Any, column: Column, rules: NormalizationRules) -> st
     if family is TypeFamily.TIMESTAMP:
         return _timestamp(value, rules.timestamp_precision)
     if family is TypeFamily.TIMESTAMPTZ:
-        utc = value.astimezone(dt.timezone.utc).replace(tzinfo=None)
+        utc = value.astimezone(dt.UTC).replace(tzinfo=None)
         return _timestamp(utc, rules.timestamp_precision)
     text = str(value)
     if family is TypeFamily.TEXT:

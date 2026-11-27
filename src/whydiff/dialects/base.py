@@ -14,7 +14,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 
-from whydiff.constants import LENGTH_SEPARATOR, NULL_TOKEN
+from whydiff.constants import FLOAT32_PRECISION, FLOAT64_PRECISION, LENGTH_SEPARATOR, NULL_TOKEN
 from whydiff.model import Column, TableRef, TypeFamily
 from whydiff.normalize.rules import NormalizationRules
 
@@ -50,10 +50,17 @@ class Dialect(ABC):
     def column_from_row(self, name: str, data_type: str, scale: object) -> Column:
         family = self.classify(data_type)
         declared = int(str(scale)) if scale is not None and family is TypeFamily.DECIMAL else None
-        return Column(name=name, native_type=data_type, family=family, scale=declared)
+        precision = self.float_precision(data_type) if family is TypeFamily.FLOAT else None
+        return Column(
+            name=name, native_type=data_type, family=family, scale=declared, precision=precision
+        )
 
     @abstractmethod
     def classify(self, data_type: str) -> TypeFamily: ...
+
+    @abstractmethod
+    def float_precision(self, data_type: str) -> int:
+        """24 for single-precision float types, 53 for double."""
 
     # -- dialect primitives ---------------------------------------------------
 
@@ -68,6 +75,76 @@ class Dialect(ABC):
     @abstractmethod
     def hash60_sql(self, text_expr: str) -> str:
         """First 15 hex digits of md5(text) as a BIGINT."""
+
+    @abstractmethod
+    def cast_sql(self, expr: str, sql_type: str) -> str:
+        """``expr`` cast to ``sql_type``, one of: text, int, bigint, float4, float8."""
+
+    @abstractmethod
+    def float_special_sql(self, expr: str) -> tuple[str, str, str]:
+        """Conditions that a float is NaN, +Infinity and -Infinity."""
+
+    # -- numbers ----------------------------------------------------------------
+    #
+    # Decimals and floats are spelled the same way in every database only after
+    # some string work: the reference is canonical_decimal and canonical_float
+    # in whydiff.normalize.reference, and these builders mirror them step by step.
+
+    def decimal_sql(self, value_text: str) -> str:
+        """Drop trailing zeros (and a bare point) from a plain decimal text."""
+        pattern = self.literal(r"\.0*$|(\.[0-9]*[1-9])0+$")
+        keep = self.literal(r"\1")
+        return f"regexp_replace({value_text}, {pattern}, {keep})"
+
+    def float_sql(self, expr: str, precision: int, significant: int | None) -> str:
+        """Scientific notation of the shortest round-trip decimal, as canonical_float."""
+        sql_type = "float4" if precision == FLOAT32_PRECISION else "float8"
+        f = self.cast_sql(expr, sql_type)
+        nan, pos_inf, neg_inf = self.float_special_sql(f)
+        # the database prints the shortest decimal that reads back as the same float
+        lowered = f"lower({self.cast_sql(f'abs({f})', 'text')})"
+        mantissa = f"split_part({lowered}, 'e', 1)"
+        exp_text = f"coalesce(nullif(split_part({lowered}, 'e', 2), ''), '0')"
+        whole = f"split_part({mantissa}, '.', 1)"
+        frac = f"split_part({mantissa}, '.', 2)"
+        raw = f"({whole} || {frac})"
+        no_lead = f"ltrim({raw}, '0')"
+        digits = f"rtrim({no_lead}, '0')"
+        exponent = (
+            f"({self.cast_sql(exp_text, 'int')} + length({whole}) - 1"
+            f" - (length({raw}) - length({no_lead})))"
+        )
+        if significant is not None:
+            head = f"left({digits}, {significant})"
+            bump = f"(case when substr({digits}, {significant + 1}, 1) >= '5' then 1 else 0 end)"
+            rounded = self.cast_sql(f"{self.cast_sql(head, 'bigint')} + {bump}", "text")
+            exponent = (
+                f"({exponent} + (case when length({rounded}) > length({head}) then 1 else 0 end))"
+            )
+            digits = f"rtrim({rounded}, '0')"
+        mantissa_out = (
+            f"(left({digits}, 1) || (case when length({digits}) > 1"
+            f" then '.' || substr({digits}, 2) else '' end))"
+        )
+        finite = (
+            f"((case when {f} < 0 then '-' else '' end) || {mantissa_out}"
+            f" || 'e' || {self.cast_sql(exponent, 'text')})"
+        )
+        return (
+            f"(case when {nan} then 'NaN' when {pos_inf} then 'Infinity'"
+            f" when {neg_inf} then '-Infinity' when {f} = 0 then '0' else {finite} end)"
+        )
+
+    def number_sql(self, expr: str, column: Column, rules: NormalizationRules) -> str:
+        """Canonical text for DECIMAL and FLOAT columns."""
+        if column.family is TypeFamily.FLOAT:
+            precision = column.precision or FLOAT64_PRECISION
+            return self.float_sql(expr, precision, rules.float_digits)
+        return self.decimal_sql(self.decimal_text_sql(expr, rules.decimal_scale))
+
+    @abstractmethod
+    def decimal_text_sql(self, expr: str, scale: int | None) -> str:
+        """Plain decimal text of a number, rounded half-up to ``scale`` if given."""
 
     # -- shared builders ------------------------------------------------------
 

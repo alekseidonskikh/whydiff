@@ -55,7 +55,7 @@ def test_lost_timestamp_precision() -> None:
 
 
 def test_timestamps_with_any_fraction_digits() -> None:
-    # --timestamp-precision 1..5; Python 3.10 parses only 3 or 6 digits natively
+    # --timestamp-precision 1..5 leaves 1 to 5 fractional digits
     assert _ts("2026-03-01T10:00:00.12").microsecond == 120000
     assert _ts("2026-03-01T10:00:00").microsecond == 0
     found = run(F.TIMESTAMP, [(ts(h)[:22], ts(h + 3)[:22]) for h in range(5)])
@@ -97,9 +97,10 @@ def test_float_noise() -> None:
 
 
 def test_noise_suggests_digits_that_really_make_values_equal() -> None:
-    # at 5 digits 1.000004 -> 1.00000 but 1.000006 -> 1.00001
-    found = run(F.FLOAT, [("1.000004", "1.000006"), ("2.000004", "2.000006")])
-    assert "--float-digits 4 " in found[0].message
+    # --float-digits counts significant digits: at 6 of them 1.000006 rounds
+    # to 1.00001 while 1.000004 rounds to 1.00000; at 5 both are 1.0000
+    found = run(F.FLOAT, [("1.000004e0", "1.000006e0"), ("2.000004e0", "2.000006e0")])
+    assert "--float-digits 5 " in found[0].message
 
 
 def test_noise_names_the_option_of_the_type() -> None:

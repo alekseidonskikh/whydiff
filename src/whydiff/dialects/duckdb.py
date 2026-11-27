@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 
+from whydiff.constants import FLOAT32_PRECISION, FLOAT64_PRECISION
 from whydiff.dialects.base import Dialect
 from whydiff.model import Column, TypeFamily
 from whydiff.normalize.rules import NormalizationRules
@@ -14,6 +15,9 @@ _INTEGER = {
 }  # fmt: skip
 _FLOAT = {"float", "real", "double"}
 _TEXT = {"varchar", "text", "string"}
+_SQL_TYPES = {
+    "text": "varchar", "int": "integer", "bigint": "bigint", "float4": "float", "float8": "double",
+}  # fmt: skip
 
 
 class DuckDBDialect(Dialect):
@@ -40,6 +44,27 @@ class DuckDBDialect(Dialect):
             return TypeFamily.TIMESTAMPTZ
         return TypeFamily.OTHER
 
+    def float_precision(self, data_type: str) -> int:
+        single = data_type.lower() in ("float", "real", "float4")
+        return FLOAT32_PRECISION if single else FLOAT64_PRECISION
+
+    def cast_sql(self, expr: str, sql_type: str) -> str:
+        return f"cast({expr} as {_SQL_TYPES[sql_type]})"
+
+    def float_special_sql(self, expr: str) -> tuple[str, str, str]:
+        return (
+            f"isnan({expr})",
+            f"(isinf({expr}) and {expr} > 0)",
+            f"(isinf({expr}) and {expr} < 0)",
+        )
+
+    def decimal_text_sql(self, expr: str, scale: int | None) -> str:
+        return (
+            f"cast({expr} as varchar)"
+            if scale is None
+            else f"cast(round({expr}, {scale}) as varchar)"
+        )
+
     def _timestamp(self, expr: str, precision: int) -> str:
         width = 19 if precision == 0 else 20 + precision
         return f"left(strftime({expr}, '%Y-%m-%dT%H:%M:%S.%f'), {width})"
@@ -48,11 +73,8 @@ class DuckDBDialect(Dialect):
         family = column.family
         if family is TypeFamily.INTEGER:
             return f"cast({expr} as varchar)"
-        if family is TypeFamily.DECIMAL:
-            digits = rules.decimal_digits(column.scale)
-            return f"cast(cast({expr} as decimal(38, {digits})) as varchar)"
-        if family is TypeFamily.FLOAT:
-            return f"cast(cast({expr} as decimal(38, {rules.float_digits})) as varchar)"
+        if family in (TypeFamily.DECIMAL, TypeFamily.FLOAT):
+            return self.number_sql(expr, column, rules)
         if family is TypeFamily.BOOLEAN:
             return f"(case when {expr} then '1' when not {expr} then '0' end)"
         if family is TypeFamily.DATE:

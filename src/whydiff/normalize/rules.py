@@ -11,7 +11,6 @@ from __future__ import annotations
 from pydantic import BaseModel, ConfigDict, Field
 
 from whydiff import defaults
-from whydiff.constants import DEFAULT_DECIMAL_DIGITS
 
 
 class NormalizationRules(BaseModel):
@@ -27,18 +26,13 @@ class NormalizationRules(BaseModel):
         default=None,
         ge=0,
         le=18,
-        description="Digits after the point for decimals; None keeps the declared scale.",
+        description="Round decimals to this many digits after the point; None compares exactly.",
     )
-    float_digits: int = Field(
+    float_digits: int | None = Field(
         default=defaults.FLOAT_DIGITS,
-        ge=0,
-        le=15,
-        description="Digits after the point for floats (rounded).",
+        ge=1,
+        le=17,
+        description="Round floats to this many significant digits; None compares exactly.",
     )
     trim_strings: bool = Field(default=False, description="Strip leading and trailing spaces.")
     case_insensitive: bool = Field(default=False, description="Lowercase strings.")
-
-    def decimal_digits(self, declared_scale: int | None) -> int:
-        if self.decimal_scale is not None:
-            return self.decimal_scale
-        return declared_scale if declared_scale is not None else DEFAULT_DECIMAL_DIGITS

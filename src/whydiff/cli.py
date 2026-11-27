@@ -71,12 +71,16 @@ def _parser() -> argparse.ArgumentParser:
         default=defaults.TIMESTAMP_PRECISION,
         help="fractional second digits kept (default: %(default)s)",
     )
-    d.add_argument("--decimal-scale", type=int, help="digits after the point for decimals")
+    d.add_argument(
+        "--decimal-scale",
+        type=int,
+        help="round decimals to this many digits after the point (default: compare exactly)",
+    )
     d.add_argument(
         "--float-digits",
         type=int,
         default=defaults.FLOAT_DIGITS,
-        help="digits after the point for floats (default: %(default)s)",
+        help="round floats to this many significant digits (default: compare exactly)",
     )
     d.add_argument("--trim", action="store_true", help="ignore leading and trailing spaces")
     d.add_argument("--ignore-case", action="store_true", help="compare strings case-insensitively")
@@ -111,6 +115,17 @@ def _parser() -> argparse.ArgumentParser:
         default=defaults.SAMPLE_LIMIT,
         help="examples shown per kind of difference (default: %(default)s)",
     )
+    d.add_argument(
+        "--statement-timeout",
+        type=float,
+        metavar="SECONDS",
+        help="cancel any single query that runs longer than this (Postgres, Greenplum)",
+    )
+    d.add_argument(
+        "--no-snapshot",
+        action="store_true",
+        help="do not hold one REPEATABLE READ transaction for the whole diff (Postgres)",
+    )
     d.add_argument("--json", action="store_true", help="print the result as JSON")
     return parser
 
@@ -137,8 +152,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             trim_strings=args.trim,
             case_insensitive=args.ignore_case,
         )
-        source = connect(args.source)
-        target = source if args.target == args.source else connect(args.target)
+        options = {"statement_timeout": args.statement_timeout, "snapshot": not args.no_snapshot}
+        source = connect(args.source, **options)
+        target = source if args.target == args.source else connect(args.target, **options)
         try:
             result = diff_tables(
                 source,
