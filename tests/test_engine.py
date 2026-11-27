@@ -40,7 +40,7 @@ def make_table(conn: Any, rows: Sequence[tuple[Any, ...]], ddl: str = DDL) -> st
 
 
 def random_rows(rng: random.Random, n: int) -> list[Row]:
-    base = dt.datetime(2024, 1, 1)
+    base = dt.datetime(2026, 1, 1)
     return [
         (
             i,
@@ -90,7 +90,7 @@ def test_null_vs_empty_string_is_a_change(backend: Any) -> None:
 
 
 def test_timestamp_precision_rule(backend: Any) -> None:
-    ts = dt.datetime(2024, 5, 1, 12, 0, 0, 123456)
+    ts = dt.datetime(2026, 5, 1, 12, 0, 0, 123456)
     a = make_table(backend, [(1, "x", None, ts, True)])
     b = make_table(backend, [(1, "x", None, ts.replace(microsecond=123000), True)])
     assert diff_tables(backend, a, backend, b, ["id"]).changed == 1

@@ -67,18 +67,18 @@ def test_float_rounds_to_configured_digits() -> None:
 
 
 def test_timestamp_precision_truncates() -> None:
-    ts = dt.datetime(2024, 1, 2, 3, 4, 5, 987654)
-    assert normalize_value(ts, col(TypeFamily.TIMESTAMP), RULES) == "2024-01-02T03:04:05.987654"
+    ts = dt.datetime(2026, 1, 2, 3, 4, 5, 987654)
+    assert normalize_value(ts, col(TypeFamily.TIMESTAMP), RULES) == "2026-01-02T03:04:05.987654"
     rules = NormalizationRules(timestamp_precision=3)
-    assert normalize_value(ts, col(TypeFamily.TIMESTAMP), rules) == "2024-01-02T03:04:05.987"
+    assert normalize_value(ts, col(TypeFamily.TIMESTAMP), rules) == "2026-01-02T03:04:05.987"
     rules = NormalizationRules(timestamp_precision=0)
-    assert normalize_value(ts, col(TypeFamily.TIMESTAMP), rules) == "2024-01-02T03:04:05"
+    assert normalize_value(ts, col(TypeFamily.TIMESTAMP), rules) == "2026-01-02T03:04:05"
 
 
 def test_timestamptz_is_converted_to_utc() -> None:
     msk = dt.timezone(dt.timedelta(hours=3))
-    ts = dt.datetime(2024, 1, 2, 3, 0, tzinfo=msk)
-    assert normalize_value(ts, col(TypeFamily.TIMESTAMPTZ), RULES) == "2024-01-02T00:00:00.000000"
+    ts = dt.datetime(2026, 1, 2, 3, 0, tzinfo=msk)
+    assert normalize_value(ts, col(TypeFamily.TIMESTAMPTZ), RULES) == "2026-01-02T00:00:00.000000"
 
 
 def test_text_options() -> None:

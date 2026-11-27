@@ -17,15 +17,15 @@ MSK = dt.timezone(dt.timedelta(hours=3))
 UTC = dt.timezone.utc
 
 ROWS: list[tuple[Any, ...]] = [
-    (1, Decimal("1.50"), 0.1, "hello", True, dt.date(2024, 1, 2),
-     dt.datetime(2024, 1, 2, 3, 4, 5, 123456), dt.datetime(2024, 1, 2, 3, 4, 5, 999999, MSK)),
+    (1, Decimal("1.50"), 0.1, "hello", True, dt.date(2026, 1, 2),
+     dt.datetime(2026, 1, 2, 3, 4, 5, 123456), dt.datetime(2026, 1, 2, 3, 4, 5, 999999, MSK)),
     (2, Decimal("0.00"), -2.675, "", False, dt.date(1999, 12, 31),
-     dt.datetime(2024, 1, 2, 3, 4, 5), dt.datetime(2024, 6, 30, 23, 0, tzinfo=UTC)),
+     dt.datetime(2026, 1, 2, 3, 4, 5), dt.datetime(2026, 6, 30, 23, 0, tzinfo=UTC)),
     (3, None, None, None, None, None, None, None),
     (4, Decimal("123456789012.35"), 1e-7, "  пробел ' кавычка | разделитель  ", True,
-     dt.date(2024, 2, 29), dt.datetime(2000, 1, 1), dt.datetime(2024, 3, 31, 1, 30, tzinfo=MSK)),
-    (5, Decimal("-7.01"), 3.0, "N", False, dt.date(2024, 1, 1),
-     dt.datetime(2024, 12, 31, 23, 59, 59, 1), dt.datetime(2024, 12, 31, 23, 59, 59, 1, UTC)),
+     dt.date(2028, 2, 29), dt.datetime(2000, 1, 1), dt.datetime(2026, 3, 31, 1, 30, tzinfo=MSK)),
+    (5, Decimal("-7.01"), 3.0, "N", False, dt.date(2026, 1, 1),
+     dt.datetime(2026, 12, 31, 23, 59, 59, 1), dt.datetime(2026, 12, 31, 23, 59, 59, 1, UTC)),
 ]  # fmt: skip
 
 RULE_SETS = [

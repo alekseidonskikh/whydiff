@@ -29,7 +29,7 @@ def kinds(found: list[Diagnosis]) -> list[str]:
 
 
 def ts(hour: int, minute: int = 0, micro: str = "000000") -> str:
-    return f"2024-03-01T{hour:02d}:{minute:02d}:00.{micro}"
+    return f"2026-03-01T{hour:02d}:{minute:02d}:00.{micro}"
 
 
 def test_timezone_shift() -> None:
@@ -56,8 +56,8 @@ def test_lost_timestamp_precision() -> None:
 
 def test_timestamps_with_any_fraction_digits() -> None:
     # --timestamp-precision 1..5; Python 3.10 parses only 3 or 6 digits natively
-    assert _ts("2024-03-01T10:00:00.12").microsecond == 120000
-    assert _ts("2024-03-01T10:00:00").microsecond == 0
+    assert _ts("2026-03-01T10:00:00.12").microsecond == 120000
+    assert _ts("2026-03-01T10:00:00").microsecond == 0
     found = run(F.TIMESTAMP, [(ts(h)[:22], ts(h + 3)[:22]) for h in range(5)])
     assert kinds(found) == ["timezone"]
 
@@ -71,7 +71,7 @@ def test_unreadable_values_never_fail_the_diff() -> None:
 
 
 def test_date_shift() -> None:
-    found = run(F.DATE, [(f"2024-01-0{d}", f"2024-01-0{d + 1}") for d in range(1, 6)])
+    found = run(F.DATE, [(f"2026-01-0{d}", f"2026-01-0{d + 1}") for d in range(1, 6)])
     assert kinds(found) == ["date_shift"] and "+1 day" in found[0].message
 
 
@@ -159,7 +159,7 @@ def test_swapped_columns() -> None:
 
 def _table(n: int) -> list[Row]:
     return [
-        (str(i), f"2024-01-01T{i % 24:02d}:00:00.000000", ["a", "b", "c"][i % 3]) for i in range(n)
+        (str(i), f"2026-01-01T{i % 24:02d}:00:00.000000", ["a", "b", "c"][i % 3]) for i in range(n)
     ]
 
 
