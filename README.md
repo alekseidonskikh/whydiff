@@ -34,7 +34,7 @@ examples
   - id='17'
   + id='300001'
   ~ id='42'  amount: '2.94' -> '2.95'
-  ~ id='5000'  created_at: '2024-01-04T11:20:00.000000' -> '2024-01-04T14:20:00.000000'
+  ~ id='5000'  created_at: '2026-01-04T11:20:00.000000' -> '2026-01-04T14:20:00.000000'
 
 DIFFERENT in 3.40s
 ```
@@ -55,7 +55,7 @@ Until the first release, install from source:
 pip install "whydiff[postgres,duckdb] @ git+https://github.com/alekseidonskikh/whydiff"
 
 whydiff diff postgresql://user@prod/db public.orders duckdb:///dev.duckdb main.orders --key id
-whydiff diff SRC TABLE TGT TABLE -k id --exclude updated_at --where "created_at >= '2024-01-01'"
+whydiff diff SRC TABLE TGT TABLE -k id --exclude updated_at --where "created_at >= '2026-01-01'"
 whydiff diff SRC TABLE TGT TABLE -k id --timestamp-precision 3 --trim --json
 whydiff diff SRC TABLE TGT TABLE -k id -v     # progress on stderr; -vv also logs every SQL query
 ```

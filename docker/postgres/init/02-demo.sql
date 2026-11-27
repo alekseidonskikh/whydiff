@@ -19,7 +19,7 @@ select
     'customer_' || (g % 97),
     (g * 7 % 10000) / 100.0,
     (array['new', 'paid', 'shipped', 'cancelled'])[g % 4 + 1],
-    timestamptz '2024-01-01 00:00:00+00' + g * interval '1 minute'
+    timestamptz '2026-01-01 00:00:00+00' + g * interval '1 minute'
 from generate_series(1, 200000) as g;
 
 create table orders_v2 as select * from orders;
@@ -30,7 +30,7 @@ update orders_v2 set created_at = created_at + interval '3 hours' where id betwe
 -- lost rows
 delete from orders_v2 where id in (17, 18);
 -- an extra row
-insert into orders_v2 values (300001, 'customer_new', 1.00, 'new', '2024-06-01 00:00:00+00');
+insert into orders_v2 values (300001, 'customer_new', 1.00, 'new', '2026-06-01 00:00:00+00');
 -- a rounding difference
 update orders_v2 set amount = amount + 0.01 where id = 42;
 
