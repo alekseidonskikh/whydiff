@@ -66,7 +66,7 @@ class DuckDBDialect(Dialect):
         )
 
     def _timestamp(self, expr: str, precision: int) -> str:
-        width = 19 if precision == 0 else 20 + precision
+        width = self.timestamp_width(precision)
         return f"left(strftime({expr}, '%Y-%m-%dT%H:%M:%S.%f'), {width})"
 
     def normalize_sql(self, expr: str, column: Column, rules: NormalizationRules) -> str:

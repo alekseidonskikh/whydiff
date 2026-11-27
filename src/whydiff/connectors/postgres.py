@@ -13,7 +13,13 @@ APPLICATION_NAME = "whydiff"
 # Settings that change how Postgres prints values. The canonical forms avoid
 # relying on them, but OTHER columns are compared as plain ::text, so a user's
 # TimeZone or IntervalStyle must not leak into the hashes.
+#
+# standard_conforming_strings is about reading, not printing: with it off (the
+# default before 9.1, so in Greenplum 5) a backslash escapes a quote inside
+# '...'. Dialect.literal only doubles quotes, so a table name like x\' would end
+# the string early, and the regex patterns in decimal_sql would change meaning.
 SESSION_SETTINGS = (
+    ("standard_conforming_strings", "on"),
     ("TimeZone", "UTC"),
     ("DateStyle", "ISO, YMD"),
     ("IntervalStyle", "postgres"),
