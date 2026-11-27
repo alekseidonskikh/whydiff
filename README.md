@@ -80,10 +80,12 @@ print(render_text(result))
 1. Columns are matched by name, ignoring case. Types are harmonized across
    databases, so an `integer` on one side and a `numeric(12,2)` on the other
    are both compared as decimals.
-2. Every value is turned into a canonical string. Timestamp precision, decimal
-   scale, float digits, trimming and case can be configured. Each row is
-   hashed into a 60-bit integer, and rows go into buckets by the hash of their
-   key.
+2. Every value is turned into a canonical string. Numbers are compared
+   exactly by default: `1.50` equals `1.5`, but `1.2e-7` does not equal
+   `3.4e-7`. Rounding (`--decimal-scale`, `--float-digits`), timestamp
+   precision, trimming and case are options. Text is hashed as UTF-8 whatever
+   the database encoding is. Each row is hashed into a 60-bit integer, and rows
+   go into buckets by the hash of their key.
 3. Each database returns only `count(*)` and `sum(row_hash)` per bucket. A sum
    doesn't depend on row order, so nothing has to be sorted.
 4. A differing bucket that is still large is split into 32 parts and compared

@@ -14,18 +14,36 @@ from whydiff.model import TableRef
 from whydiff.normalize import NormalizationRules, normalize_value, row_hash
 
 MSK = dt.timezone(dt.timedelta(hours=3))
-UTC = dt.timezone.utc
+UTC = dt.UTC
 
+INF = float("inf")
+
+# The last column is a single-precision float.
 ROWS: list[tuple[Any, ...]] = [
     (1, Decimal("1.50"), 0.1, "hello", True, dt.date(2026, 1, 2),
-     dt.datetime(2026, 1, 2, 3, 4, 5, 123456), dt.datetime(2026, 1, 2, 3, 4, 5, 999999, MSK)),
+     dt.datetime(2026, 1, 2, 3, 4, 5, 123456), dt.datetime(2026, 1, 2, 3, 4, 5, 999999, MSK), 0.1),
     (2, Decimal("0.00"), -2.675, "", False, dt.date(1999, 12, 31),
-     dt.datetime(2026, 1, 2, 3, 4, 5), dt.datetime(2026, 6, 30, 23, 0, tzinfo=UTC)),
-    (3, None, None, None, None, None, None, None),
+     dt.datetime(2026, 1, 2, 3, 4, 5), dt.datetime(2026, 6, 30, 23, 0, tzinfo=UTC), 16777217.0),
+    (3, None, None, None, None, None, None, None, None),
     (4, Decimal("123456789012.35"), 1e-7, "  пробел ' кавычка | разделитель  ", True,
-     dt.date(2028, 2, 29), dt.datetime(2000, 1, 1), dt.datetime(2026, 3, 31, 1, 30, tzinfo=MSK)),
+     dt.date(2028, 2, 29), dt.datetime(2000, 1, 1), dt.datetime(2026, 3, 31, 1, 30, tzinfo=MSK),
+     3.4028235e38),
     (5, Decimal("-7.01"), 3.0, "N", False, dt.date(2026, 1, 1),
-     dt.datetime(2026, 12, 31, 23, 59, 59, 1), dt.datetime(2026, 12, 31, 23, 59, 59, 1, UTC)),
+     dt.datetime(2026, 12, 31, 23, 59, 59, 1), dt.datetime(2026, 12, 31, 23, 59, 59, 1, UTC),
+     -2.5),
+    # floats that rounding to a fixed number of decimal places got wrong: tiny values
+    # that all became 0.000000, and huge ones that overflowed DECIMAL(38, 6)
+    (6, Decimal("10"), 1.2e-7, None, None, None, None, None, 1.2e-7),
+    (7, Decimal("0.05"), 3.4e-7, None, None, None, None, None, 3.4e-7),
+    (8, None, 1e33, None, None, None, None, None, 1e30),
+    (9, None, 123456789012345678.0, None, None, None, None, None, 1 / 3),
+    (10, None, 1 / 3, None, None, None, None, None, 9.999999),
+    (11, None, 5e-324, None, None, None, None, None, None),
+    (12, None, 0.99999999999, None, None, None, None, None, None),
+    (13, None, -0.0, None, None, None, None, None, -0.0),
+    (14, None, float("nan"), None, None, None, None, None, float("nan")),
+    (15, None, INF, None, None, None, None, None, INF),
+    (16, None, -INF, None, None, None, None, None, -INF),
 ]  # fmt: skip
 
 RULE_SETS = [
@@ -46,6 +64,10 @@ def literal(value: Any) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, float):
+        if value != value:
+            return "'NaN'"
+        if value in (INF, -INF):
+            return "'Infinity'" if value > 0 else "'-Infinity'"
         return repr(value)
     if isinstance(value, (int, Decimal)):
         return str(value)
@@ -59,7 +81,7 @@ def create_typed_table(conn: Any) -> str:
     double = "double" if conn.dialect.name == "duckdb" else "double precision"
     conn.execute(
         f"create table {name} (id integer, n numeric(20,2), f {double}, s text, b boolean, "
-        "d date, ts timestamp, tz timestamp with time zone)"
+        "d date, ts timestamp, tz timestamp with time zone, r real)"
     )
     values = ", ".join("(" + ", ".join(literal(v) for v in r) + ")" for r in ROWS)
     conn.execute(f"insert into {name} values {values}")
@@ -75,7 +97,7 @@ def test_normalized_values_and_hashes_match_reference(
     d = backend.dialect
     select = ", ".join(d.normalized_sql(c, rules) for c in columns)
     got = backend.execute(
-        f"select {select}, {d.row_hash_sql(columns, rules)} from {table} order by id"
+        f"select {select}, {d.row_hash_sql(columns, rules)} from {table} order by {table}.id"
     )
     assert len(got) == len(ROWS)
     for expected_row, got_row in zip(ROWS, got, strict=True):
@@ -92,7 +114,7 @@ def test_segment_ids_match_reference(backend: Any, modulus: int) -> None:
     rules = NormalizationRules()
     d = backend.dialect
     got = backend.execute(
-        f"select ({d.key_hash_sql(keys, rules)}) % {modulus} from {table} order by id"
+        f"select ({d.key_hash_sql(keys, rules)}) % {modulus} from {table} order by {table}.id"
     )
     want = [row_hash((r[0], r[3]), keys, rules) % modulus for r in ROWS]
     assert [int(g[0]) for g in got] == want

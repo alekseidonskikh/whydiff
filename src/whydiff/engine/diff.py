@@ -27,7 +27,7 @@ from typing import Any, TypeVar
 
 from whydiff import defaults
 from whydiff.connectors.base import Connector, get_columns, run_query
-from whydiff.constants import HASH_SPACE, IDS_PER_QUERY, MAX_BUCKETS
+from whydiff.constants import CHECKSUM_MODULUS, HASH_SPACE, IDS_PER_QUERY, MAX_BUCKETS
 from whydiff.diagnose import Affected, diagnose
 from whydiff.log import get_logger
 from whydiff.model import Column, TableRef, TypeFamily
@@ -65,16 +65,21 @@ def _harmonize(src: Column, tgt: Column) -> tuple[Column, Column, bool]:
     """Return columns normalized the same way, and whether the types differed."""
     if src.family is tgt.family:
         if src.family is TypeFamily.DECIMAL and src.scale != tgt.scale:
-            scale = max(s for s in (src.scale, tgt.scale, 0) if s is not None)
-            return replace(src, scale=scale), replace(tgt, scale=scale), True
+            # decimals are compared without trailing zeros, so the scale is only reported
+            return src, tgt, True
+        if src.family is TypeFamily.FLOAT and src.precision != tgt.precision:
+            # a single and a double compare as singles; as doubles nearly every row
+            # would differ by the rounding of the single side
+            narrow = min(p for p in (src.precision, tgt.precision) if p is not None)
+            return replace(src, precision=narrow), replace(tgt, precision=narrow), True
         return src, tgt, False
     if src.family in _NUMERIC_RANK and tgt.family in _NUMERIC_RANK:
         wide = max(src.family, tgt.family, key=lambda f: _NUMERIC_RANK[f])
-        scales = [s for s in (src.scale, tgt.scale) if s is not None]
-        wide_scale = max(scales) if scales else None
+        precisions = [c.precision for c in (src, tgt) if c.precision is not None]
+        precision = min(precisions) if wide is TypeFamily.FLOAT and precisions else None
         return (
-            replace(src, family=wide, scale=wide_scale),
-            replace(tgt, family=wide, scale=wide_scale),
+            replace(src, family=wide, precision=precision),
+            replace(tgt, family=wide, precision=precision),
             True,
         )
     return src, tgt, True
@@ -185,7 +190,7 @@ class _Side:
                 self.table, self.keys, self.columns, rules, modulus, self.where, p
             )
             rows = run_query(self.conn, sql, f"{self.name} checksums % {modulus}")
-            result.update({int(b): (int(n), int(h)) for b, n, h in rows})
+            result.update({int(b): (int(n), int(h) % CHECKSUM_MODULUS) for b, n, h in rows})
         return result
 
     def rows(self, rules: NormalizationRules, segments: Sequence[_Segment]) -> list[Row]:

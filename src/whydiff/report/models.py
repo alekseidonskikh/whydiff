@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
 from whydiff.normalize.rules import NormalizationRules
 
 
-class Status(str, Enum):
+class Status(StrEnum):
     IDENTICAL = "identical"
     DIFFERENT = "different"
 

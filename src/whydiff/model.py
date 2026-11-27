@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 
 
-class TypeFamily(str, Enum):
+class TypeFamily(StrEnum):
     """Database-independent group of column types.
 
     Normalization rules are defined per family, so a ``bigint`` in Postgres and
@@ -30,6 +30,8 @@ class Column:
     native_type: str
     family: TypeFamily
     scale: int | None = None  # declared scale for DECIMAL columns, if known
+    # binary precision of FLOAT columns: 24 for single (real), 53 for double
+    precision: int | None = None
 
 
 @dataclass(frozen=True)

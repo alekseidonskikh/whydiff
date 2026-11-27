@@ -45,25 +45,80 @@ def test_hash_fits_signed_bigint() -> None:
 @pytest.mark.parametrize(
     ("value", "scale", "expected"),
     [
-        (Decimal("1.5"), 2, "1.50"),
+        # exact by default: trailing zeros go, nothing is rounded
+        (Decimal("1.50"), None, "1.5"),
+        (Decimal("1.5000"), None, "1.5"),
+        (Decimal("2.345"), None, "2.345"),
+        (Decimal("-0.004"), None, "-0.004"),
+        (Decimal("1.0000001"), None, "1.0000001"),
+        (Decimal("10"), None, "10"),
+        (Decimal("0.00"), None, "0"),
+        (Decimal("1E+3"), None, "1000"),
+        # --decimal-scale rounds half away from zero first
         (Decimal("2.345"), 2, "2.35"),
         (Decimal("-2.345"), 2, "-2.35"),
-        (Decimal("-0.004"), 2, "0.00"),
-        (Decimal("10"), 0, "10"),
+        (Decimal("-0.004"), 2, "0"),
+        (Decimal("1.25"), 1, "1.3"),
+        (Decimal("1.5"), 2, "1.5"),
     ],
 )
-def test_decimal(value: Decimal, scale: int, expected: str) -> None:
-    assert normalize_value(value, col(TypeFamily.DECIMAL, scale), RULES) == expected
+def test_decimal(value: Decimal, scale: int | None, expected: str) -> None:
+    rules = NormalizationRules(decimal_scale=scale)
+    # the declared scale of the column no longer matters
+    assert normalize_value(value, col(TypeFamily.DECIMAL, 2), rules) == expected
+    assert normalize_value(value, col(TypeFamily.DECIMAL, None), rules) == expected
 
 
-def test_decimal_scale_override() -> None:
-    rules = NormalizationRules(decimal_scale=1)
-    assert normalize_value(Decimal("1.25"), col(TypeFamily.DECIMAL, 2), rules) == "1.3"
+def test_decimal_special_values() -> None:
+    assert normalize_value(Decimal("NaN"), col(TypeFamily.DECIMAL), RULES) == "NaN"
+    assert normalize_value(Decimal("-Infinity"), col(TypeFamily.DECIMAL), RULES) == "-Infinity"
 
 
-def test_float_rounds_to_configured_digits() -> None:
-    assert normalize_value(0.1 + 0.2, col(TypeFamily.FLOAT), RULES) == "0.300000"
-    assert normalize_value(float("nan"), col(TypeFamily.FLOAT), RULES) == "NaN"
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (0.1 + 0.2, "3.0000000000000004e-1"),
+        (0.1, "1e-1"),
+        (1.25, "1.25e0"),
+        (-2.675, "-2.675e0"),
+        (100.0, "1e2"),
+        # rounding to six places made both of these 0.000000
+        (1.2e-7, "1.2e-7"),
+        (3.4e-7, "3.4e-7"),
+        # and this one overflowed DECIMAL(38, 6)
+        (1e33, "1e33"),
+        (0.0, "0"),
+        (-0.0, "0"),
+        (float("nan"), "NaN"),
+        (float("inf"), "Infinity"),
+        (float("-inf"), "-Infinity"),
+    ],
+)
+def test_float_is_exact_by_default(value: float, expected: str) -> None:
+    assert normalize_value(value, col(TypeFamily.FLOAT), RULES) == expected
+
+
+@pytest.mark.parametrize(
+    ("value", "digits", "expected"),
+    [
+        (0.1 + 0.2, 15, "3e-1"),
+        (2.675, 3, "2.68e0"),
+        (9.9999, 3, "1e1"),  # the carry moves the exponent
+        (1.2e-7, 1, "1e-7"),
+        (123456.0, 2, "1.2e5"),
+    ],
+)
+def test_float_significant_digits(value: float, digits: int, expected: str) -> None:
+    rules = NormalizationRules(float_digits=digits)
+    assert normalize_value(value, col(TypeFamily.FLOAT), rules) == expected
+
+
+def test_single_precision_floats() -> None:
+    single = Column("c", "real", TypeFamily.FLOAT, precision=24)
+    assert normalize_value(0.1, single, RULES) == "1e-1"
+    assert normalize_value(16777217.0, single, RULES) == "1.6777216e7"
+    assert normalize_value(3.4028235e38, single, RULES) == "3.4028235e38"
+    assert normalize_value(1e39, single, RULES) == "Infinity"
 
 
 def test_timestamp_precision_truncates() -> None:

@@ -14,7 +14,14 @@ log = get_logger("connect")
 SUPPORTED_SCHEMES = ("postgresql", "postgres", "greenplum", "duckdb")
 
 
-def connect(uri: str) -> Connector:
+def connect(
+    uri: str, *, statement_timeout: float | None = None, snapshot: bool = True
+) -> Connector:
+    """Open a read-only connection.
+
+    ``statement_timeout`` (seconds) and ``snapshot`` apply to Postgres and
+    Greenplum; see :class:`~whydiff.connectors.postgres.PostgresConnector`.
+    """
     scheme, sep, rest = uri.partition("://")
     if not sep:
         raise ValueError(
@@ -25,7 +32,9 @@ def connect(uri: str) -> Connector:
     if scheme in ("postgresql", "postgres", "greenplum"):
         from whydiff.connectors.postgres import PostgresConnector
 
-        conn = PostgresConnector("postgresql://" + rest)
+        conn = PostgresConnector(
+            "postgresql://" + rest, statement_timeout=statement_timeout, snapshot=snapshot
+        )
     elif scheme == "duckdb":
         from whydiff.connectors.duckdb import DuckDBConnector
 

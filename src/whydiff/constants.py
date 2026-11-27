@@ -25,8 +25,16 @@ HASH_HEX_DIGITS = 15
 HASH_BITS = HASH_HEX_DIGITS * 4
 HASH_SPACE = 1 << HASH_BITS
 
-#: Digits after the point for a DECIMAL column whose scale is unknown.
-DEFAULT_DECIMAL_DIGITS = 6
+#: Segment checksums are sums of row hashes taken modulo this. Postgres sums
+#: exactly, DuckDB in HUGEINT and ClickHouse wraps at 64 bits, so the modulus
+#: has to be part of the format for all of them to agree.
+CHECKSUM_MODULUS = 1 << 64
+
+#: Binary precision of single-precision floats. A single and a double column
+#: are compared as singles: comparing as doubles would expose the rounding of
+#: the single side in nearly every row.
+FLOAT32_PRECISION = 24
+FLOAT64_PRECISION = 53
 
 # -- engine limits ------------------------------------------------------------
 
